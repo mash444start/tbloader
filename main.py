@@ -6,6 +6,9 @@ import yt_dlp
 import shutil
 from dotenv import load_dotenv
 
+from keep_alive import keep_alive
+keep_alive()  # Start Flask server
+
 # Load .env file
 load_dotenv()
 
@@ -145,3 +148,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
