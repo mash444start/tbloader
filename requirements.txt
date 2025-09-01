@@ -1,6 +1,4 @@
 pyTelegramBotAPI==4.29.0
-yt-dlp==2025.8.29
-Flask==2.3.3
-python-dotenv==1.0.0
-instaloader>=4.15  # latest version, Python 3.13 compatible
-
+instaloader>=4.15
+yt-dlp>=2025.8.30
+Flask>=2.3.2
