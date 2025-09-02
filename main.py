@@ -7,6 +7,9 @@ import shutil
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
+from keep_alive import keep_alive 
+keep_alive() # Flask server for uptime
+
 # ===== ENV LOAD =====
 load_dotenv()
 API_TOKEN = os.getenv("API_TOKEN")
@@ -184,3 +187,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
