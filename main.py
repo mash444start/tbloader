@@ -4,12 +4,10 @@ from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import yt_dlp
 import shutil
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-from keep_alive import keep_alive
-keep_alive()  # Flask server for uptime
-
-# Load environment variables
+# ===== ENV LOAD =====
 load_dotenv()
 API_TOKEN = os.getenv("API_TOKEN")
 if not API_TOKEN:
@@ -17,20 +15,23 @@ if not API_TOKEN:
 
 bot = AsyncTeleBot(API_TOKEN)
 
-# Cookies for Instagram & Twitter
+# ===== COOKIES =====
 INSTAGRAM_COOKIES = "insta_cookies.txt"
 TWITTER_COOKIES = "twitter_cookies.txt"
+FACEBOOK_COOKIES = "facebook_cookies.txt"
 
-# Check ffmpeg
+# ===== FFMPEG CHECK =====
 FFMPEG_EXISTS = shutil.which("ffmpeg") is not None
 if FFMPEG_EXISTS:
     print("✅ ffmpeg detected. High-quality merge enabled.")
 else:
     print("⚠️ ffmpeg not detected. Using single format.")
 
-# User state & queue
+# ===== STATE =====
 user_platform = {}
 download_queue = asyncio.Queue()
+insta_usage = {}  # ✅ Track Instagram usage
+
 
 # ===== /start =====
 @bot.message_handler(commands=['start'])
@@ -39,15 +40,18 @@ async def start(message):
     markup.row_width = 2
     markup.add(
         InlineKeyboardButton("Instagram", callback_data="instagram"),
-        InlineKeyboardButton("X/Twitter", callback_data="twitter")
+        InlineKeyboardButton("X/Twitter", callback_data="twitter"),
+        InlineKeyboardButton("Facebook", callback_data="facebook")
     )
     await bot.send_message(message.chat.id, "🎯 Choose platform:", reply_markup=markup)
+
 
 # ===== BUTTON CALLBACK =====
 @bot.callback_query_handler(func=lambda call: True)
 async def callback_query(call):
     user_platform[call.from_user.id] = call.data
     await bot.send_message(call.message.chat.id, "📎 Send the video URL:")
+
 
 # ===== HANDLE URL =====
 @bot.message_handler(func=lambda message: True)
@@ -57,14 +61,37 @@ async def handle_url(message):
         await bot.send_message(message.chat.id, "❌ Please select a platform first using /start.")
         return
 
+    user_id = message.from_user.id
+
+    # ✅ Instagram-specific limit
+    if platform == "instagram":
+        today = datetime.utcnow().date()
+        usage = insta_usage.get(user_id, {"count": 0, "last_time": None, "day": today})
+
+        # Reset if new day
+        if usage["day"] != today:
+            usage = {"count": 0, "last_time": None, "day": today}
+
+        # Daily limit
+        if usage["count"] >= 10:
+            await bot.send_message(message.chat.id, "❌ Daily limit reached (10 successful videos). Try again tomorrow.")
+            return
+
+        # Cooldown only after success
+        if usage["last_time"] and datetime.utcnow() - usage["last_time"] < timedelta(minutes=10):
+            wait_time = 10 - int((datetime.utcnow() - usage["last_time"]).total_seconds() // 60)
+            await bot.send_message(message.chat.id, f"⏳ Please wait {wait_time} minutes before next Instagram download.")
+            return
+
     progress_msg = await bot.send_message(message.chat.id, "🎬 Your video is being processed... ⏳")
-    await download_queue.put((message.chat.id, message.text.strip(), platform, progress_msg.message_id))
+    await download_queue.put((message.chat.id, message.text.strip(), platform, progress_msg.message_id, user_id))
     user_platform.pop(message.from_user.id, None)
+
 
 # ===== WORKER =====
 async def download_worker(worker_id):
     while True:
-        chat_id, url, platform, progress_msg_id = await download_queue.get()
+        chat_id, url, platform, progress_msg_id, user_id = await download_queue.get()
         try:
             progress_data = {'percent': '0.0%'}
 
@@ -87,6 +114,8 @@ async def download_worker(worker_id):
                     opts['cookiefile'] = INSTAGRAM_COOKIES
                 elif platform == "twitter" and os.path.exists(TWITTER_COOKIES):
                     opts['cookiefile'] = TWITTER_COOKIES
+                elif platform == "facebook" and os.path.exists(FACEBOOK_COOKIES):
+                    opts['cookiefile'] = FACEBOOK_COOKIES
 
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     info = ydl.extract_info(url, download=True)
@@ -94,10 +123,10 @@ async def download_worker(worker_id):
                     file_path = f"/tmp/video_{chat_id}.{ext}"
                     return file_path
 
-            # Download in thread
+            # Run download in background thread
             file_path = await asyncio.to_thread(download_video)
 
-            # Progress update (optional)
+            # Progress update
             async def show_progress():
                 last = ''
                 while last != '100.0%':
@@ -121,7 +150,17 @@ async def download_worker(worker_id):
             await bot.edit_message_text("✅ Video sent successfully! 🎉", chat_id, progress_msg_id)
             print(f"✅ Worker {worker_id}: Sent {platform} video.")
 
-            # Remove temp file
+            # ✅ Update Instagram usage only on success
+            if platform == "instagram":
+                today = datetime.utcnow().date()
+                usage = insta_usage.get(user_id, {"count": 0, "last_time": None, "day": today})
+                if usage["day"] != today:
+                    usage = {"count": 0, "last_time": None, "day": today}
+                usage["count"] += 1
+                usage["last_time"] = datetime.utcnow()
+                usage["day"] = today
+                insta_usage[user_id] = usage
+
             if os.path.exists(file_path):
                 os.remove(file_path)
 
@@ -134,12 +173,14 @@ async def download_worker(worker_id):
         finally:
             download_queue.task_done()
 
+
 # ===== MAIN =====
 async def main():
     print("✅ Render-ready Async Telegram Bot running...")
     workers = [asyncio.create_task(download_worker(i)) for i in range(1, 4)]
     await bot.infinity_polling()
     await asyncio.gather(*workers)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
