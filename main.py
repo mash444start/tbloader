@@ -7,9 +7,9 @@ import shutil
 from dotenv import load_dotenv
 
 from keep_alive import keep_alive
-keep_alive()  # Start Flask server
+keep_alive()  # Flask server for uptime
 
-# Load .env
+# Load environment variables
 load_dotenv()
 API_TOKEN = os.getenv("API_TOKEN")
 if not API_TOKEN:
@@ -17,14 +17,18 @@ if not API_TOKEN:
 
 bot = AsyncTeleBot(API_TOKEN)
 
-# Cookies
+# Cookies for Instagram & Twitter
 INSTAGRAM_COOKIES = "insta_cookies.txt"
 TWITTER_COOKIES = "twitter_cookies.txt"
 
 # Check ffmpeg
 FFMPEG_EXISTS = shutil.which("ffmpeg") is not None
+if FFMPEG_EXISTS:
+    print("✅ ffmpeg detected. High-quality merge enabled.")
+else:
+    print("⚠️ ffmpeg not detected. Using single format.")
 
-# User queue & state
+# User state & queue
 user_platform = {}
 download_queue = asyncio.Queue()
 
@@ -46,7 +50,7 @@ async def callback_query(call):
     await bot.send_message(call.message.chat.id, "📎 Send the video URL:")
 
 # ===== HANDLE URL =====
-@bot.message_handler(func=lambda m: True)
+@bot.message_handler(func=lambda message: True)
 async def handle_url(message):
     platform = user_platform.get(message.from_user.id)
     if not platform:
@@ -57,45 +61,43 @@ async def handle_url(message):
     await download_queue.put((message.chat.id, message.text.strip(), platform, progress_msg.message_id))
     user_platform.pop(message.from_user.id, None)
 
-# ===== DOWNLOAD WORKER =====
+# ===== WORKER =====
 async def download_worker(worker_id):
     while True:
         chat_id, url, platform, progress_msg_id = await download_queue.get()
         try:
-            # Local download path
-            os.makedirs("downloads", exist_ok=True)
-            file_path = f"downloads/video_{chat_id}.%(ext)s"
-
             progress_data = {'percent': '0.0%'}
 
             def progress_hook(d):
                 if d['status'] == 'downloading':
                     progress_data['percent'] = d.get('_percent_str', '0.0%')
 
-            def fetch_video():
-                ydl_opts = {
+            tmp_file = f"/tmp/video_{chat_id}.%(ext)s"
+
+            def download_video():
+                opts = {
                     'format': 'bestvideo+bestaudio/best' if FFMPEG_EXISTS else 'best',
                     'noplaylist': True,
                     'quiet': True,
                     'progress_hooks': [progress_hook],
-                    'outtmpl': file_path,
-                    'http_headers': {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                                      '(KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36'
-                    },
-                    'merge_output_format': 'mp4'
+                    'outtmpl': tmp_file
                 }
 
                 if platform == "instagram" and os.path.exists(INSTAGRAM_COOKIES):
-                    ydl_opts['cookiefile'] = INSTAGRAM_COOKIES
+                    opts['cookiefile'] = INSTAGRAM_COOKIES
                 elif platform == "twitter" and os.path.exists(TWITTER_COOKIES):
-                    ydl_opts['cookiefile'] = TWITTER_COOKIES
+                    opts['cookiefile'] = TWITTER_COOKIES
 
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                with yt_dlp.YoutubeDL(opts) as ydl:
                     info = ydl.extract_info(url, download=True)
-                    return ydl.prepare_filename(info)
+                    ext = info.get('ext', 'mp4')
+                    file_path = f"/tmp/video_{chat_id}.{ext}"
+                    return file_path
 
-            # Progress updater
+            # Download in thread
+            file_path = await asyncio.to_thread(download_video)
+
+            # Progress update (optional)
             async def show_progress():
                 last = ''
                 while last != '100.0%':
@@ -110,24 +112,25 @@ async def download_worker(worker_id):
 
             progress_task = asyncio.create_task(show_progress())
 
-            # Download video locally
-            video_file = await asyncio.to_thread(fetch_video)
-
-            # Send to Telegram
+            # Send video
             await bot.send_chat_action(chat_id, "upload_video")
-            await bot.send_video(chat_id, open(video_file, "rb"))
+            with open(file_path, "rb") as f:
+                await bot.send_video(chat_id, f)
 
             progress_task.cancel()
             await bot.edit_message_text("✅ Video sent successfully! 🎉", chat_id, progress_msg_id)
-            print(f"✅ Worker {worker_id}: Video sent.")
+            print(f"✅ Worker {worker_id}: Sent {platform} video.")
 
-            # Optional: remove local file after send
-            os.remove(video_file)
+            # Remove temp file
+            if os.path.exists(file_path):
+                os.remove(file_path)
 
         except Exception as e:
             print(f"❌ Worker {worker_id} error:", e)
-            await bot.edit_message_text("❌ Failed to fetch/send the video. Try again later!", chat_id, progress_msg_id)
-
+            await bot.edit_message_text(
+                "❌ Failed to fetch/send the video. Try again later!",
+                chat_id, progress_msg_id
+            )
         finally:
             download_queue.task_done()
 
