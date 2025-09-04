@@ -9,6 +9,7 @@ import yt_dlp
 import shutil
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+
 from keep_alive import keep_alive 
 keep_alive() # Flask server for uptime
 
@@ -24,7 +25,6 @@ bot = AsyncTeleBot(API_TOKEN)
 INSTAGRAM_COOKIES = "insta_cookies.txt"
 TWITTER_COOKIES = "twitter_cookies.txt"
 FACEBOOK_COOKIES = "facebook_cookies.txt"
-# ❌ YouTube cookies removed (public only)
 
 # ===== FFMPEG CHECK =====
 FFMPEG_EXISTS = shutil.which("ffmpeg") is not None
@@ -46,8 +46,7 @@ async def start(message):
     markup.add(
         InlineKeyboardButton("Instagram", callback_data="instagram"),
         InlineKeyboardButton("X/Twitter", callback_data="twitter"),
-        InlineKeyboardButton("Facebook", callback_data="facebook"),
-        InlineKeyboardButton("YouTube", callback_data="youtube")   # ✅ Added YouTube button
+        InlineKeyboardButton("Facebook", callback_data="facebook")
     )
     await bot.send_message(message.chat.id, "🎯 Choose platform:", reply_markup=markup)
 
@@ -99,26 +98,14 @@ async def download_worker(worker_id):
                     'quiet': True,
                     'outtmpl': tmp_file
                 }
-
-                # ✅ Platform-specific cookies
                 if platform == "instagram" and os.path.exists(INSTAGRAM_COOKIES):
                     opts['cookiefile'] = INSTAGRAM_COOKIES
                 elif platform == "twitter" and os.path.exists(TWITTER_COOKIES):
                     opts['cookiefile'] = TWITTER_COOKIES
                 elif platform == "facebook" and os.path.exists(FACEBOOK_COOKIES):
                     opts['cookiefile'] = FACEBOOK_COOKIES
-                elif platform == "youtube":
-                    # 🚫 No cookies used — public only mode
-                    pass
-
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     info = ydl.extract_info(url, download=True)
-
-                    # 🔒 YouTube private / restricted check
-                    if platform == "youtube":
-                        if info.get("age_limit", 0) > 0 or info.get("availability") in ["private", "needs_auth"]:
-                            raise Exception("❌ Sorry! YouTube private or age-restricted video download is not possible.")
-
                     ext = info.get('ext', 'mp4')
                     return f"/tmp/video_{chat_id}.{ext}"
 
@@ -157,8 +144,7 @@ async def download_worker(worker_id):
 
         except Exception as e:
             print(f"❌ Worker {worker_id} error:", e)
-            error_msg = str(e) if "YouTube" in str(e) else "❌ Failed to fetch/send the video. Try again later!"
-            await bot.edit_message_text(error_msg, chat_id, progress_msg_id)
+            await bot.edit_message_text("❌ Failed to fetch/send the video. Try again later!", chat_id, progress_msg_id)
             if os.path.exists(tmp_file):
                 os.remove(tmp_file)
         finally:
