@@ -1,6 +1,9 @@
 #from keep_alive import keep_alive 
 #keep_alive() # Flask server for uptime
 
+#from keep_alive import keep_alive 
+#keep_alive() # Flask server for uptime
+
 import os
 import asyncio
 from telebot.async_telebot import AsyncTeleBot
@@ -9,6 +12,7 @@ import yt_dlp
 import shutil
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+
 from keep_alive import keep_alive 
 keep_alive() # Flask server for uptime
 
@@ -21,10 +25,12 @@ if not API_TOKEN:
 bot = AsyncTeleBot(API_TOKEN)
 
 # ===== COOKIES =====
-INSTAGRAM_COOKIES = "insta_cookies.txt"
-TWITTER_COOKIES = "twitter_cookies.txt"
-FACEBOOK_COOKIES = "facebook_cookies.txt"
-YOUTUBE_COOKIES = "youtube_cookies.txt"   # ✅ Added YouTube cookies
+COOKIE_FILES = {
+    "instagram": "insta_cookies.txt",
+    "twitter": "twitter_cookies.txt",
+    "facebook": "facebook_cookies.txt",
+    "youtube": "youtube_cookies.txt"   # ✅ YouTube cookies
+}
 
 # ===== FFMPEG CHECK =====
 FFMPEG_EXISTS = shutil.which("ffmpeg") is not None
@@ -67,7 +73,7 @@ async def handle_url(message):
 
     user_id = message.from_user.id
 
-    # Instagram limit check
+    # Instagram daily/interval limit
     if platform == "instagram":
         today = datetime.utcnow().date()
         usage = insta_usage.get(user_id, {"count": 0, "last_time": None, "day": today})
@@ -99,15 +105,10 @@ async def download_worker(worker_id):
                     'quiet': True,
                     'outtmpl': tmp_file
                 }
-                # ✅ Platform-specific cookies
-                if platform == "instagram" and os.path.exists(INSTAGRAM_COOKIES):
-                    opts['cookiefile'] = INSTAGRAM_COOKIES
-                elif platform == "twitter" and os.path.exists(TWITTER_COOKIES):
-                    opts['cookiefile'] = TWITTER_COOKIES
-                elif platform == "facebook" and os.path.exists(FACEBOOK_COOKIES):
-                    opts['cookiefile'] = FACEBOOK_COOKIES
-                elif platform == "youtube" and os.path.exists(YOUTUBE_COOKIES):   # ✅ YouTube cookies
-                    opts['cookiefile'] = YOUTUBE_COOKIES
+                # ✅ Universal cookie check
+                cookie_path = COOKIE_FILES.get(platform)
+                if cookie_path and os.path.exists(cookie_path):
+                    opts['cookiefile'] = cookie_path
 
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     info = ydl.extract_info(url, download=True)
