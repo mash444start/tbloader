@@ -9,7 +9,6 @@ import yt_dlp
 import shutil
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-
 from keep_alive import keep_alive 
 keep_alive() # Flask server for uptime
 
@@ -25,6 +24,7 @@ bot = AsyncTeleBot(API_TOKEN)
 INSTAGRAM_COOKIES = "insta_cookies.txt"
 TWITTER_COOKIES = "twitter_cookies.txt"
 FACEBOOK_COOKIES = "facebook_cookies.txt"
+YOUTUBE_COOKIES = "youtube_cookies.txt"   # ✅ Added YouTube cookies
 
 # ===== FFMPEG CHECK =====
 FFMPEG_EXISTS = shutil.which("ffmpeg") is not None
@@ -46,7 +46,8 @@ async def start(message):
     markup.add(
         InlineKeyboardButton("Instagram", callback_data="instagram"),
         InlineKeyboardButton("X/Twitter", callback_data="twitter"),
-        InlineKeyboardButton("Facebook", callback_data="facebook")
+        InlineKeyboardButton("Facebook", callback_data="facebook"),
+        InlineKeyboardButton("YouTube", callback_data="youtube")   # ✅ Added YouTube button
     )
     await bot.send_message(message.chat.id, "🎯 Choose platform:", reply_markup=markup)
 
@@ -98,12 +99,16 @@ async def download_worker(worker_id):
                     'quiet': True,
                     'outtmpl': tmp_file
                 }
+                # ✅ Platform-specific cookies
                 if platform == "instagram" and os.path.exists(INSTAGRAM_COOKIES):
                     opts['cookiefile'] = INSTAGRAM_COOKIES
                 elif platform == "twitter" and os.path.exists(TWITTER_COOKIES):
                     opts['cookiefile'] = TWITTER_COOKIES
                 elif platform == "facebook" and os.path.exists(FACEBOOK_COOKIES):
                     opts['cookiefile'] = FACEBOOK_COOKIES
+                elif platform == "youtube" and os.path.exists(YOUTUBE_COOKIES):   # ✅ YouTube cookies
+                    opts['cookiefile'] = YOUTUBE_COOKIES
+
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     info = ydl.extract_info(url, download=True)
                     ext = info.get('ext', 'mp4')
