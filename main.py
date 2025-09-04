@@ -1,9 +1,6 @@
 #from keep_alive import keep_alive 
 #keep_alive() # Flask server for uptime
 
-#from keep_alive import keep_alive 
-#keep_alive() # Flask server for uptime
-
 import os
 import asyncio
 from telebot.async_telebot import AsyncTeleBot
@@ -165,3 +162,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
