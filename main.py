@@ -9,7 +9,6 @@ import yt_dlp
 import shutil
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-
 from keep_alive import keep_alive 
 keep_alive() # Flask server for uptime
 
@@ -22,12 +21,10 @@ if not API_TOKEN:
 bot = AsyncTeleBot(API_TOKEN)
 
 # ===== COOKIES =====
-COOKIE_FILES = {
-    "instagram": "insta_cookies.txt",
-    "twitter": "twitter_cookies.txt",
-    "facebook": "facebook_cookies.txt",
-    "youtube": "youtube_cookies.txt"   # ✅ YouTube cookies
-}
+INSTAGRAM_COOKIES = "insta_cookies.txt"
+TWITTER_COOKIES = "twitter_cookies.txt"
+FACEBOOK_COOKIES = "facebook_cookies.txt"
+# ❌ YouTube cookies removed (public only)
 
 # ===== FFMPEG CHECK =====
 FFMPEG_EXISTS = shutil.which("ffmpeg") is not None
@@ -70,7 +67,7 @@ async def handle_url(message):
 
     user_id = message.from_user.id
 
-    # Instagram daily/interval limit
+    # Instagram limit check
     if platform == "instagram":
         today = datetime.utcnow().date()
         usage = insta_usage.get(user_id, {"count": 0, "last_time": None, "day": today})
@@ -102,13 +99,26 @@ async def download_worker(worker_id):
                     'quiet': True,
                     'outtmpl': tmp_file
                 }
-                # ✅ Universal cookie check
-                cookie_path = COOKIE_FILES.get(platform)
-                if cookie_path and os.path.exists(cookie_path):
-                    opts['cookiefile'] = cookie_path
+
+                # ✅ Platform-specific cookies
+                if platform == "instagram" and os.path.exists(INSTAGRAM_COOKIES):
+                    opts['cookiefile'] = INSTAGRAM_COOKIES
+                elif platform == "twitter" and os.path.exists(TWITTER_COOKIES):
+                    opts['cookiefile'] = TWITTER_COOKIES
+                elif platform == "facebook" and os.path.exists(FACEBOOK_COOKIES):
+                    opts['cookiefile'] = FACEBOOK_COOKIES
+                elif platform == "youtube":
+                    # 🚫 No cookies used — public only mode
+                    pass
 
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     info = ydl.extract_info(url, download=True)
+
+                    # 🔒 YouTube private / restricted check
+                    if platform == "youtube":
+                        if info.get("age_limit", 0) > 0 or info.get("availability") in ["private", "needs_auth"]:
+                            raise Exception("❌ Sorry! YouTube private or age-restricted video download is not possible.")
+
                     ext = info.get('ext', 'mp4')
                     return f"/tmp/video_{chat_id}.{ext}"
 
@@ -147,7 +157,8 @@ async def download_worker(worker_id):
 
         except Exception as e:
             print(f"❌ Worker {worker_id} error:", e)
-            await bot.edit_message_text("❌ Failed to fetch/send the video. Try again later!", chat_id, progress_msg_id)
+            error_msg = str(e) if "YouTube" in str(e) else "❌ Failed to fetch/send the video. Try again later!"
+            await bot.edit_message_text(error_msg, chat_id, progress_msg_id)
             if os.path.exists(tmp_file):
                 os.remove(tmp_file)
         finally:
@@ -162,4 +173,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
