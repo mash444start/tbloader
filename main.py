@@ -85,32 +85,56 @@ async def handle_url(message):
     user_platform.pop(message.from_user.id, None)
 
 # ===== WORKER =====
+# ===== WORKER =====
 async def download_worker(worker_id):
     while True:
         chat_id, url, platform, progress_msg_id, user_id = await download_queue.get()
         tmp_file = f"/tmp/video_{chat_id}.%(ext)s"
+
         try:
-            # Download video
-            def download_video():
+            # --- Download function with cookies fallback ---
+            def download_video(use_cookies=False):
                 opts = {
                     'format': 'bestvideo+bestaudio/best' if FFMPEG_EXISTS else 'best',
                     'noplaylist': True,
                     'quiet': True,
                     'outtmpl': tmp_file
                 }
-                if platform == "instagram" and os.path.exists(INSTAGRAM_COOKIES):
-                    opts['cookiefile'] = INSTAGRAM_COOKIES
-                elif platform == "twitter" and os.path.exists(TWITTER_COOKIES):
-                    opts['cookiefile'] = TWITTER_COOKIES
-                elif platform == "facebook" and os.path.exists(FACEBOOK_COOKIES):
-                    opts['cookiefile'] = FACEBOOK_COOKIES
+
+                if use_cookies:
+                    if platform == "instagram" and os.path.exists(INSTAGRAM_COOKIES):
+                        opts['cookiefile'] = INSTAGRAM_COOKIES
+                    elif platform == "twitter" and os.path.exists(TWITTER_COOKIES):
+                        opts['cookiefile'] = TWITTER_COOKIES
+                    elif platform == "facebook" and os.path.exists(FACEBOOK_COOKIES):
+                        opts['cookiefile'] = FACEBOOK_COOKIES
+
                 with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(url, download=True)
-                    ext = info.get('ext', 'mp4')
-                    return f"/tmp/video_{chat_id}.{ext}"
+                    return ydl.extract_info(url, download=True)
+
+            # 🔹 Step 1: Try without cookies
+            info = None
+            try:
+                info = await asyncio.to_thread(download_video, False)
+                print(f"Worker {worker_id}: First attempt (no cookies) succeeded.")
+            except Exception as e1:
+                print(f"Worker {worker_id}: First attempt (no cookies) failed:", e1)
+
+            # 🔹 Step 2: If failed, retry with cookies
+            if not info:
+                try:
+                    info = await asyncio.to_thread(download_video, True)
+                    print(f"Worker {worker_id}: Second attempt (with cookies) succeeded.")
+                except Exception as e2:
+                    print(f"Worker {worker_id}: Second attempt (with cookies) failed:", e2)
+
+            if not info:
+                raise RuntimeError("Both attempts failed")
+
+            ext = info.get('ext', 'mp4')
+            file_path = f"/tmp/video_{chat_id}.{ext}"
 
             await bot.edit_message_text("✅ Download complete. Checking file size...", chat_id, progress_msg_id)
-            file_path = await asyncio.to_thread(download_video)
 
             # Check size
             size_mb = os.path.getsize(file_path) / (1024 * 1024)
@@ -159,3 +183,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
