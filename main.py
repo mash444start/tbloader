@@ -47,7 +47,7 @@ def detect_platform(url):
 @bot.message_handler(commands=['start'])
 async def start(m):
     msg = (
-        "🚀 <b>TB_LOADER PRO — Ultra Fast Downloader</b>\n\n"
+        "🚀 <b>TB_LOADER v(2.0) — Fast (short) Downloader</b>\n\n"
         "💎 Supports: <b>Instagram</b> • <b>Twitter/X</b> • <b>Facebook</b>\n"
         "🎬 Video & 🎵 Audio in seconds\n"
         "⚠️ <i>Files up to 50MB only</i>\n"
@@ -240,4 +240,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
