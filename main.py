@@ -51,7 +51,7 @@ async def start(m):
         "💎 Supports: <b>Instagram</b> • <b>Twitter/X</b> • <b>Facebook</b>\n"
         "🎬 Video & 🎵 Audio in seconds\n"
         "⚠️ <i>Files up to 50MB only</i>\n"
-        "🔥 <u>No ads • Super fast!</u>\n\n"
+        "🔥 <u>No ads • fast!</u>\n\n"
         "📩 <b>Just paste your link below!</b>"
     )
     await bot.send_message(m.chat.id, msg, parse_mode='HTML')
@@ -240,3 +240,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
