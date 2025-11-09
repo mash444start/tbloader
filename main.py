@@ -1,186 +1,242 @@
 #from keep_alive import keep_alive 
 #keep_alive() # Flask server for uptime
 
+# ===== TB_LOADER PRO — Fully Fixed Premium Style + 50MB Limit + HTML Mode =====
 import os
 import asyncio
+import shutil
+import hashlib
+from datetime import datetime, timezone
+from dotenv import load_dotenv
+
 from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import yt_dlp
-import shutil
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
 
 from keep_alive import keep_alive 
 keep_alive() # Flask server for uptime
 
-# ===== ENV LOAD =====
+
+# ===== Load environment =====
 load_dotenv()
 API_TOKEN = os.getenv("API_TOKEN")
 if not API_TOKEN:
-    raise RuntimeError("❌ API_TOKEN not found in .env!")
+    raise RuntimeError("API_TOKEN not found in .env!")
 
 bot = AsyncTeleBot(API_TOKEN)
 
-# ===== COOKIES =====
-INSTAGRAM_COOKIES = "insta_cookies.txt"
-TWITTER_COOKIES = "twitter_cookies.txt"
-FACEBOOK_COOKIES = "facebook_cookies.txt"
-
-# ===== FFMPEG CHECK =====
+# ===== Global setup =====
 FFMPEG_EXISTS = shutil.which("ffmpeg") is not None
-if FFMPEG_EXISTS:
-    print("✅ ffmpeg detected. High-quality merge enabled.")
-else:
-    print("⚠️ ffmpeg not detected. Using single format.")
-
-# ===== STATE =====
-user_platform = {}
-download_queue = asyncio.Queue()
+download_queue = asyncio.Queue(maxsize=50)
 insta_usage = {}
+lock = asyncio.Lock()
+url_storage = {}
+
+def short_hash(url: str) -> str:
+    return hashlib.md5(url.encode('utf-8')).hexdigest()[:12]
+
+# ===== Platform detection =====
+def detect_platform(url):
+    url = url.lower()
+    if "instagram.com" in url: return "instagram"
+    if any(x in url for x in ["twitter.com", "x.com", "t.co"]): return "twitter"
+    if any(x in url for x in ["facebook.com", "fb.watch", "fb.com"]): return "facebook"
+    return None
 
 # ===== /start =====
 @bot.message_handler(commands=['start'])
-async def start(message):
-    markup = InlineKeyboardMarkup()
-    markup.row_width = 2
-    markup.add(
-        InlineKeyboardButton("Instagram", callback_data="instagram"),
-        InlineKeyboardButton("X/Twitter", callback_data="twitter"),
-        InlineKeyboardButton("Facebook", callback_data="facebook")
+async def start(m):
+    msg = (
+        "🚀 <b>TB_LOADER PRO — Ultra Fast Downloader</b>\n\n"
+        "💎 Supports: <b>Instagram</b> • <b>Twitter/X</b> • <b>Facebook</b>\n"
+        "🎬 Video & 🎵 Audio in seconds\n"
+        "⚠️ <i>Files up to 50MB only</i>\n"
+        "🔥 <u>No ads • Super fast!</u>\n\n"
+        "📩 <b>Just paste your link below!</b>"
     )
-    await bot.send_message(message.chat.id, "🎯 Choose platform:", reply_markup=markup)
+    await bot.send_message(m.chat.id, msg, parse_mode='HTML')
 
-# ===== BUTTON CALLBACK =====
-@bot.callback_query_handler(func=lambda call: True)
-async def callback_query(call):
-    user_platform[call.from_user.id] = call.data
-    await bot.send_message(call.message.chat.id, "📎 Send the video URL:")
-
-# ===== HANDLE URL =====
-@bot.message_handler(func=lambda message: True)
-async def handle_url(message):
-    platform = user_platform.get(message.from_user.id)
-    if not platform:
-        await bot.send_message(message.chat.id, "❌ Please select a platform first using /start.")
+# ===== Handle messages =====
+@bot.message_handler(func=lambda m: True)
+async def handle_message(message):
+    links = [l.strip() for l in message.text.split() if l.strip().startswith("http")]
+    if not links:
+        await bot.reply_to(message, "❌ <b>No valid link found!</b>\nSend Instagram/Twitter/Facebook link 🔗", parse_mode='HTML')
         return
 
-    user_id = message.from_user.id
+    for url in links:
+        platform = detect_platform(url)
+        if not platform:
+            await bot.reply_to(message, f"⚠️ <b>Unsupported link:</b>\n{url}", parse_mode='HTML')
+            continue
 
-    # Instagram limit check
-    if platform == "instagram":
-        today = datetime.utcnow().date()
-        usage = insta_usage.get(user_id, {"count": 0, "last_time": None, "day": today})
-        if usage["day"] != today:
-            usage = {"count": 0, "last_time": None, "day": today}
-        if usage["count"] >= 10:
-            await bot.send_message(message.chat.id, "❌ Daily limit reached (10 videos). Try again tomorrow.")
+        # Instagram usage limit
+        async with lock:
+            today = datetime.now(timezone.utc).date()
+            user_id = message.from_user.id
+            if user_id not in insta_usage or insta_usage[user_id]["day"] != today:
+                insta_usage[user_id] = {"count": 0, "day": today}
+            if insta_usage[user_id]["count"] >= 10:
+                await bot.reply_to(message, "🚫 <b>Instagram limit:</b> 10/day\n<i>Try tomorrow ⏰</i>", parse_mode='HTML')
+                continue
+            insta_usage[user_id]["count"] += 1
+
+        key = short_hash(url)
+        url_storage[key] = url
+        callback_data = f"{key}_{platform}_{message.message_id}"
+
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            InlineKeyboardButton("🎬 Video", callback_data=f"v_{callback_data}"),
+            InlineKeyboardButton("🎵 Audio", callback_data=f"a_{callback_data}")
+        )
+
+        pmap = {"instagram": "Instagram", "twitter": "Twitter/X", "facebook": "Facebook"}
+        await bot.reply_to(
+            message,
+            f"✅ <b>{pmap[platform]}</b> Detected!\n<i>Choose format below 👇</i>",
+            reply_markup=markup,
+            parse_mode='HTML'
+        )
+
+# ===== Callback handler =====
+@bot.callback_query_handler(func=lambda c: c.data.startswith(("v_", "a_")))
+async def handle_callback(call):
+    await bot.answer_callback_query(call.id)
+    try:
+        prefix = call.data[0]
+        rest = call.data[2:]
+        key, platform, msg_id = rest.rsplit("_", 2)
+
+        url = url_storage.get(key)
+        if not url:
+            await bot.send_message(call.message.chat.id, "❌ <b>Link expired!</b> Send again.", parse_mode='HTML')
             return
-        if usage["last_time"] and datetime.utcnow() - usage["last_time"] < timedelta(minutes=10):
-            wait_time = 10 - int((datetime.utcnow() - usage["last_time"]).total_seconds() // 60)
-            await bot.send_message(message.chat.id, f"⏳ Wait {wait_time} minutes before next download.")
-            return
 
-    progress_msg = await bot.send_message(message.chat.id, "✅ URL received. Please wait, downloading...")
-    await download_queue.put((message.chat.id, message.text.strip(), platform, progress_msg.message_id, user_id))
-    user_platform.pop(message.from_user.id, None)
+        media_type = "video" if prefix == "v" else "audio"
 
-# ===== WORKER =====
-# ===== WORKER =====
+        status_msg = "⏳ <b>Starting download...</b>\n⚡ <i>Ultra fast processing</i>"
+        status = await bot.send_message(
+            call.message.chat.id,
+            status_msg,
+            reply_to_message_id=int(msg_id),
+            parse_mode='HTML'
+        )
+        await download_queue.put((
+            call.message.chat.id, url, platform,
+            status.message_id, call.from_user.id,
+            media_type, int(msg_id)
+        ))
+
+        if len(url_storage) > 2000:
+            url_storage.clear()
+
+    except Exception as e:
+        print("Callback error:", e)
+        await bot.send_message(call.message.chat.id, "❌ <b>Error!</b> Try again.", parse_mode='HTML')
+
+# ===== Download worker =====
 async def download_worker(worker_id):
     while True:
-        chat_id, url, platform, progress_msg_id, user_id = await download_queue.get()
-        tmp_file = f"/tmp/video_{chat_id}.%(ext)s"
+        chat_id, url, platform, status_id, user_id, media_type, reply_id = await download_queue.get()
+        tmp_path = f"/tmp/dl_{chat_id}_{status_id}"
+        final_path = None
 
         try:
-            # --- Download function with cookies fallback ---
-            def download_video(use_cookies=False):
-                opts = {
-                    'format': 'bestvideo+bestaudio/best' if FFMPEG_EXISTS else 'best',
-                    'noplaylist': True,
-                    'quiet': True,
-                    'outtmpl': tmp_file
-                }
+            ydl_opts = {
+                'noplaylist': True,
+                'quiet': True,
+                'no_warnings': True,
+                'outtmpl': f"{tmp_path}.%(ext)s",
+                'merge_output_format': 'mp4' if media_type == "video" else None,
+            }
 
-                if use_cookies:
-                    if platform == "instagram" and os.path.exists(INSTAGRAM_COOKIES):
-                        opts['cookiefile'] = INSTAGRAM_COOKIES
-                    elif platform == "twitter" and os.path.exists(TWITTER_COOKIES):
-                        opts['cookiefile'] = TWITTER_COOKIES
-                    elif platform == "facebook" and os.path.exists(FACEBOOK_COOKIES):
-                        opts['cookiefile'] = FACEBOOK_COOKIES
+            if media_type == "audio":
+                if FFMPEG_EXISTS:
+                    ydl_opts['format'] = 'bestaudio'
+                    ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}]
+                else:
+                    ydl_opts['format'] = 'bestaudio/best'
+            else:
+                ydl_opts['format'] = 'bestvideo+bestaudio/best' if FFMPEG_EXISTS else 'best'
 
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    return ydl.extract_info(url, download=True)
-
-            # 🔹 Step 1: Try without cookies
             info = None
-            try:
-                info = await asyncio.to_thread(download_video, False)
-                print(f"Worker {worker_id}: First attempt (no cookies) succeeded.")
-            except Exception as e1:
-                print(f"Worker {worker_id}: First attempt (no cookies) failed:", e1)
-
-            # 🔹 Step 2: If failed, retry with cookies
-            if not info:
-                try:
-                    info = await asyncio.to_thread(download_video, True)
-                    print(f"Worker {worker_id}: Second attempt (with cookies) succeeded.")
-                except Exception as e2:
-                    print(f"Worker {worker_id}: Second attempt (with cookies) failed:", e2)
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = await asyncio.to_thread(ydl.extract_info, url, download=True)
 
             if not info:
-                raise RuntimeError("Both attempts failed")
+                cookie_file = f"{platform}_cookies.txt"
+                if os.path.exists(cookie_file):
+                    ydl_opts['cookiefile'] = cookie_file
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = await asyncio.to_thread(ydl.extract_info, url, download=True)
 
-            ext = info.get('ext', 'mp4')
-            file_path = f"/tmp/video_{chat_id}.{ext}"
+            if not info:
+                raise Exception("Download failed")
 
-            await bot.edit_message_text("✅ Download complete. Checking file size...", chat_id, progress_msg_id)
+            ext = info.get('ext', 'mp4') if media_type == "video" else 'mp3'
+            final_path = f"{tmp_path}.{ext}"
+            if not os.path.exists(final_path):
+                for f in os.listdir("/tmp"):
+                    if f.startswith(f"dl_{chat_id}_{status_id}"):
+                        final_path = f"/tmp/{f}"
+                        break
 
-            # Check size
-            size_mb = os.path.getsize(file_path) / (1024 * 1024)
-            if size_mb > 49:
-                await bot.edit_message_text(f"❌ File too large ({size_mb:.2f} MB). Try smaller than 49 MB.", chat_id, progress_msg_id)
-                os.remove(file_path)
-                continue
+            if not os.path.exists(final_path):
+                raise Exception("File not found")
 
-            await bot.edit_message_text("🎬 File size OK. Sending video, please wait...", chat_id, progress_msg_id)
+            size_mb = os.path.getsize(final_path) / (1024 * 1024)
 
-            # Send video
-            await bot.send_chat_action(chat_id, "upload_video")
-            with open(file_path, "rb") as f:
-                await bot.send_video(chat_id, f)
+            await bot.edit_message_text(
+                f"⚙️ <b>Processing complete!</b>\nSize: <i>{size_mb:.1f} MB</i>",
+                chat_id, status_id,
+                parse_mode='HTML'
+            )
 
-            await bot.edit_message_text("✅ Video sent successfully! 🎉", chat_id, progress_msg_id)
-            print(f"✅ Worker {worker_id}: Sent {platform} video.")
-
-            # Update Instagram usage
-            if platform == "instagram":
-                today = datetime.utcnow().date()
-                usage = insta_usage.get(user_id, {"count": 0, "last_time": None, "day": today})
-                if usage["day"] != today:
-                    usage = {"count": 0, "last_time": None, "day": today}
-                usage["count"] += 1
-                usage["last_time"] = datetime.utcnow()
-                usage["day"] = today
-                insta_usage[user_id] = usage
-
-            os.remove(file_path)
+            if size_mb > 50:
+                await bot.edit_message_text(
+                    "❌ <b>File too large!</b> Failed to send\n<i>(Max 50MB allowed)</i>",
+                    chat_id, status_id,
+                    parse_mode='HTML'
+                )
+            else:
+                await bot.edit_message_text("📤 <b>Sending directly...</b>", chat_id, status_id, parse_mode='HTML')
+                with open(final_path, 'rb') as f:
+                    if media_type == "audio":
+                        await bot.send_audio(
+                            chat_id, f,
+                            reply_to_message_id=reply_id,
+                            caption="🎵 <b>Your audio is ready!</b> — TB_Loader Pro",
+                            parse_mode='HTML'
+                        )
+                    else:
+                        await bot.send_video(
+                            chat_id, f,
+                            supports_streaming=True,
+                            reply_to_message_id=reply_id,
+                            caption="🎬 <b>Your video is ready!</b> — TB_Loader Pro",
+                            parse_mode='HTML'
+                        )
+                await bot.edit_message_text("✅ <b>Sent successfully! Enjoy! 🎉</b>", chat_id, status_id, parse_mode='HTML')
 
         except Exception as e:
-            print(f"❌ Worker {worker_id} error:", e)
-            await bot.edit_message_text("❌ Failed to fetch/send the video. Try again later!", chat_id, progress_msg_id)
-            if os.path.exists(tmp_file):
-                os.remove(tmp_file)
+            print(f"Worker {worker_id} error: {e}")
+            try:
+                await bot.edit_message_text("❌ <b>Download failed!</b>\nTry again", chat_id, status_id, parse_mode='HTML')
+            except: pass
         finally:
+            for f in os.listdir("/tmp"):
+                if f.startswith(f"dl_{chat_id}_{status_id}") or f.startswith(f"m_{chat_id}_{status_id}"):
+                    try: os.remove(f"/tmp/{f}")
+                    except: pass
             download_queue.task_done()
 
-# ===== MAIN =====
+# ===== Main =====
 async def main():
-    print("✅ Render-ready Async Telegram Bot running...")
-    workers = [asyncio.create_task(download_worker(i)) for i in range(1, 4)]
+    print("🚀 TB_LOADER PRO STARTED — Premium Style, 50MB Limit, Ultra Stable")
+    for i in range(12):
+        asyncio.create_task(download_worker(i))
     await bot.infinity_polling()
-    await asyncio.gather(*workers)
 
 if __name__ == "__main__":
     asyncio.run(main())
-
