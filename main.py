@@ -41,14 +41,15 @@ def detect_platform(url):
     if "instagram.com" in url: return "instagram"
     if any(x in url for x in ["twitter.com", "x.com", "t.co"]): return "twitter"
     if any(x in url for x in ["facebook.com", "fb.watch", "fb.com"]): return "facebook"
+    if any(x in url for x in ["tiktok.com", "vm.tiktok.com"]): return "tiktok"
     return None
 
 # ===== /start =====
 @bot.message_handler(commands=['start'])
 async def start(m):
     msg = (
-        "🚀 <b>TB_LOADER v(2.0) — Fast (short) Downloader</b>\n\n"
-        "💎 Supports: <b>Instagram</b> • <b>Twitter/X</b> • <b>Facebook</b>\n"
+        "🚀 <b>TB_LOADER v(3.0) — Fast (short) Downloader</b>\n\n"
+        "💎 Supports: <b>Instagram</b> • <b>Twitter/X</b> • <b>Facebook</b> • <b>TikTok</b>\n"
         "🎬 Video & 🎵 Audio in seconds\n"
         "⚠️ <i>Files up to 50MB only</i>\n"
         "🔥 <u>No ads • fast!</u>\n\n"
@@ -57,11 +58,11 @@ async def start(m):
     await bot.send_message(m.chat.id, msg, parse_mode='HTML')
 
 # ===== Handle messages =====
-@bot.message_handler(func=lambda m: True)
+@bot.message_handler(func=lambda m: True)  
 async def handle_message(message):
     links = [l.strip() for l in message.text.split() if l.strip().startswith("http")]
     if not links:
-        await bot.reply_to(message, "❌ <b>No valid link found!</b>\nSend Instagram/Twitter/Facebook link 🔗", parse_mode='HTML')
+        await bot.reply_to(message, "❌ <b>No valid link found!</b>\nSend Instagram/Twitter/Facebook/TikTok link 🔗", parse_mode='HTML')
         return
 
     for url in links:
@@ -74,12 +75,13 @@ async def handle_message(message):
         async with lock:
             today = datetime.now(timezone.utc).date()
             user_id = message.from_user.id
-            if user_id not in insta_usage or insta_usage[user_id]["day"] != today:
-                insta_usage[user_id] = {"count": 0, "day": today}
-            if insta_usage[user_id]["count"] >= 10:
-                await bot.reply_to(message, "🚫 <b>Instagram limit:</b> 10/day\n<i>Try tomorrow ⏰</i>", parse_mode='HTML')
-                continue
-            insta_usage[user_id]["count"] += 1
+            if platform == "instagram":
+                if user_id not in insta_usage or insta_usage[user_id]["day"] != today:
+                    insta_usage[user_id] = {"count": 0, "day": today}
+                if insta_usage[user_id]["count"] >= 10:
+                    await bot.reply_to(message, "🚫 <b>Instagram limit:</b> 10/day\n<i>Try tomorrow ⏰</i>", parse_mode='HTML')
+                    continue
+                insta_usage[user_id]["count"] += 1
 
         key = short_hash(url)
         url_storage[key] = url
@@ -91,7 +93,13 @@ async def handle_message(message):
             InlineKeyboardButton("🎵 Audio", callback_data=f"a_{callback_data}")
         )
 
-        pmap = {"instagram": "Instagram", "twitter": "Twitter/X", "facebook": "Facebook"}
+        pmap = {
+            "instagram": "Instagram",
+            "twitter": "Twitter/X",
+            "facebook": "Facebook",
+            "tiktok": "TikTok"
+        }
+
         await bot.reply_to(
             message,
             f"✅ <b>{pmap[platform]}</b> Detected!\n<i>Choose format below 👇</i>",
@@ -151,6 +159,7 @@ async def download_worker(worker_id):
                 'merge_output_format': 'mp4' if media_type == "video" else None,
             }
 
+            # Platform-specific tweaks
             if media_type == "audio":
                 if FFMPEG_EXISTS:
                     ydl_opts['format'] = 'bestaudio'
@@ -158,12 +167,16 @@ async def download_worker(worker_id):
                 else:
                     ydl_opts['format'] = 'bestaudio/best'
             else:
-                ydl_opts['format'] = 'bestvideo+bestaudio/best' if FFMPEG_EXISTS else 'best'
+                if platform == "tiktok":
+                    ydl_opts['format'] = 'bestvideo+bestaudio/best'
+                else:
+                    ydl_opts['format'] = 'bestvideo+bestaudio/best' if FFMPEG_EXISTS else 'best'
 
             info = None
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = await asyncio.to_thread(ydl.extract_info, url, download=True)
 
+            # Fallback with cookies (for private or region-restricted videos)
             if not info:
                 cookie_file = f"{platform}_cookies.txt"
                 if os.path.exists(cookie_file):
@@ -233,12 +246,10 @@ async def download_worker(worker_id):
 
 # ===== Main =====
 async def main():
-    print("🚀 TB_LOADER PRO STARTED — Premium Style, 50MB Limit, Ultra Stable")
+    print("🚀 TB_LOADER PRO STARTED — Premium Style, 50MB Limit, Ultra Stable, TikTok Supported")
     for i in range(12):
         asyncio.create_task(download_worker(i))
     await bot.infinity_polling()
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
