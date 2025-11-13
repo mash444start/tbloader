@@ -22,10 +22,6 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 
-from keep_alive import keep_alive 
-keep_alive() # Flask server for uptime
-
-
 # ===== Config =====
 USAGE_FILE = "usage.json"
 INSTA_FILE = "insta_usage.json"
@@ -150,12 +146,13 @@ async def send_start_keyboard(chat_id, msg_id=None):
     markup = InlineKeyboardMarkup(row_width=3)
     markup.add(
         InlineKeyboardButton("📄 Profile", callback_data="profile"),
-        InlineKeyboardButton("📊 Stats", callback_data="stats"),
         InlineKeyboardButton("ℹ️ Help", callback_data="help"),
-        InlineKeyboardButton("📝 About", callback_data="about")
+        InlineKeyboardButton("📝 About", callback_data="about"),
+        InlineKeyboardButton("🎵 Convert Audio", callback_data="convert")  # New button
     )
+
     msg = (
-        "🚀 <b>TB_LOADER v(3.2) PRO+</b> — Fast Downloader\n\n"
+        "🚀 <b>TB_LOADER v 4.0 PRO</b> — Fast Downloader\n\n"
         "💎 Supports: <b>Instagram</b> • <b>Twitter/X</b> • <b>Facebook</b> • <b>TikTok</b>\n"
         "🎬 Video & 🎵 Audio in seconds\n"
         f"⚠️ <i>Files up to {MAX_SEND_MB}MB</i>\n\n"
@@ -205,20 +202,6 @@ async def send_help_keyboard(chat_id, msg_id=None):
         sent = await bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=markup)
         return sent.message_id
 
-async def send_stats_keyboard(chat_id, msg_id=None):
-    qsize = download_queue.qsize()
-    ff = "✅" if FFMPEG_EXISTS else "❌"
-    markup = InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        InlineKeyboardButton("🏠 Start", callback_data="start"),
-        InlineKeyboardButton("ℹ️ Help", callback_data="help")
-    )
-    msg = f"📊 <b>System Stats</b>\nQueue: {qsize}\nWorkers: {MAX_WORKERS}\nFFmpeg: {ff}"
-    if msg_id:
-        await bot.edit_message_text(msg, chat_id, msg_id, parse_mode="HTML", reply_markup=markup)
-    else:
-        sent = await bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=markup)
-        return sent.message_id
 
 async def send_about_keyboard(chat_id, msg_id=None):
     markup = InlineKeyboardMarkup(row_width=2)
@@ -232,6 +215,33 @@ async def send_about_keyboard(chat_id, msg_id=None):
     else:
         sent = await bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=markup)
         return sent.message_id
+    
+
+# ===== Convert Audio Keyboard =====
+async def send_convert_audio_keyboard(chat_id, msg_id=None):
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("🏠 Start", callback_data="start"),
+        InlineKeyboardButton("📄 Profile", callback_data="profile")
+    )
+    msg = (
+        "🎵 <b>Convert Audio</b>\n\n"
+        "Send me a video file, and I will convert it to audio (MP3) for you.\n\n"
+        "• Works with videos up to 50MB\n"
+        "• Use /start to return to main menu"
+    )
+    if msg_id:
+        
+        try:
+            await bot.edit_message_text(msg, chat_id, msg_id, parse_mode="HTML", reply_markup=markup)
+        except:
+           
+            sent = await bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=markup)
+            return sent.message_id
+    else:
+        sent = await bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=markup)
+        return sent.message_id
+
 
 # ===== Bot commands (updated to use edit-in-place) =====
 @bot.message_handler(commands=["start"])
@@ -246,16 +256,18 @@ async def profile(m):
 async def help_cmd(m):
     await send_help_keyboard(m.chat.id)
 
-@bot.message_handler(commands=["stats"])
-async def stats(m):
-    await send_stats_keyboard(m.chat.id)
-
 @bot.message_handler(commands=["about"])
 async def about(m):
     await send_about_keyboard(m.chat.id)
 
+@bot.message_handler(commands=["convert"])
+async def convert_audio(m):
+    await send_convert_audio_keyboard(m.chat.id)
+
+
+
 # ===== Inline callback handler for menu navigation (edit in place) =====
-@bot.callback_query_handler(func=lambda c: c.data in ["start","profile","help","stats","about"])
+@bot.callback_query_handler(func=lambda c: c.data in ["start","profile","help","stats","about","convert"])
 async def inline_commands(call):
     await bot.answer_callback_query(call.id)
     cmd = call.data
@@ -269,10 +281,112 @@ async def inline_commands(call):
         await send_profile_keyboard(chat_id, user_id, msg_id)
     elif cmd == "help": 
         await send_help_keyboard(chat_id, msg_id)
-    elif cmd == "stats": 
-        await send_stats_keyboard(chat_id, msg_id)
     elif cmd == "about": 
         await send_about_keyboard(chat_id, msg_id)
+    elif cmd == "convert": 
+        await send_convert_audio_keyboard(chat_id, msg_id)  # <-- call your new function
+
+
+
+
+
+@bot.message_handler(content_types=["video", "document"])
+async def handle_video_file(message):
+    file_info = None
+    file_id = None
+    if message.video:
+        file_info = message.video
+        file_id = file_info.file_id
+    elif message.document and message.document.mime_type.startswith("video/"):
+        file_info = message.document
+        file_id = file_info.file_id
+    else:
+        return
+
+    key = short_hash(file_id + str(time.time()))
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        InlineKeyboardButton("🎵 Convert to Audio (MP3)", callback_data=f"convert_{key}")
+    )
+
+    # Save file info in memory
+    url_storage[key] = {
+        "file_id": file_id,
+        "chat_id": message.chat.id,
+        "file_name": getattr(file_info, "file_name", "video")
+    }
+
+   
+    status_msg = await bot.send_message(
+        message.chat.id,
+        "✅ Video received! Tap below to convert to audio:",
+        reply_markup=markup
+    )
+    url_storage[key]["status_msg_id"] = status_msg.message_id
+
+
+import aiofiles
+
+# ===== Convert Callback =====
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("convert_"))
+async def handle_convert_callback(call):
+    await bot.answer_callback_query(call.id)
+    key = call.data.split("_", 1)[1]
+    rec = url_storage.get(key)
+    if not rec:
+        await bot.send_message(call.message.chat.id, "❌ Video expired or missing!")
+        return
+
+    chat_id = rec["chat_id"]
+    file_id = rec["file_id"]
+    file_name = rec.get("file_name", "video")
+    msg_id = rec.get("status_msg_id") 
+    tmp_file = os.path.join(TMP_DIR, f"{key}.mp4")
+    output_file = os.path.join(TMP_DIR, f"{key}.mp3")
+
+    try:
+        await bot.edit_message_text("⏳ Downloading video...", chat_id, msg_id)
+
+        # --- Get file info ---
+        file_info = await bot.get_file(file_id)
+        file_path = file_info.file_path
+        file_url = f"https://api.telegram.org/file/bot{API_TOKEN}/{file_path}"
+
+        # --- Download video using aiohttp ---
+        async with aiohttp.ClientSession() as session:
+            async with session.get(file_url) as resp:
+                if resp.status == 200:
+                    f = await aiofiles.open(tmp_file, mode='wb')
+                    await f.write(await resp.read())
+                    await f.close()
+                else:
+                    raise Exception(f"Failed to download, status {resp.status}")
+
+        # --- Convert using ffmpeg ---
+        if FFMPEG_EXISTS:
+            cmd = f'ffmpeg -y -i "{tmp_file}" -vn -ab 192k -ar 44100 -f mp3 "{output_file}"'
+            os.system(cmd)
+        else:
+            await bot.send_message(chat_id, "⚠️ FFmpeg not installed. Cannot convert.")
+            return
+
+        await bot.edit_message_text("📤 Conversion complete! Sending audio...", chat_id, msg_id)
+        # --- Send audio ---
+        async with aiofiles.open(output_file, "rb") as f:
+            await bot.send_audio(chat_id, f, caption=f"🎵 {file_name} — Converted to MP3")
+
+    except Exception as e:
+        print("Conversion error:", e)
+        await bot.edit_message_text("❌ Conversion failed!", chat_id, msg_id)
+    finally:
+        # Cleanup
+        for f in [tmp_file, output_file]:
+            try: os.remove(f)
+            except: pass
+        if key in url_storage:
+            url_storage.pop(key, None)
+
+
 
 
 # ===== Message handler =====
