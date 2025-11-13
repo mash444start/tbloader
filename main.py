@@ -21,6 +21,8 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+from keep_alive import keep_alive 
+keep_alive() # Flask server for uptime
 
 # ===== Config =====
 USAGE_FILE = "usage.json"
@@ -663,5 +665,6 @@ if __name__ == "__main__":
         print("Main loop stopped:", e)
     finally:
         save_usage()
+
 
 
