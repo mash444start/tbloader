@@ -159,7 +159,7 @@ async def send_start_keyboard(chat_id, msg_id=None):
         "🎬 Video & 🎵 Audio in seconds\n"
         f"⚠️ <i>Files up to {MAX_SEND_MB}MB</i>\n\n"
         "📩 <b>Paste one or more links below (space/newline separated)</b>\n\n"
-        "• Single link → inline buttons (clean chat)\n• Multiple links → batch replies"
+        "<b>Download files with fast experience</b>⚡⚡"
     )
     if msg_id:
         await bot.edit_message_text(msg, chat_id, msg_id, parse_mode="HTML", reply_markup=markup)
@@ -211,7 +211,7 @@ async def send_about_keyboard(chat_id, msg_id=None):
         InlineKeyboardButton("🏠 Start", callback_data="start"),
         InlineKeyboardButton("ℹ️ Help", callback_data="help")
     )
-    msg = "TB_LOADER PRO+ — by your dev. Version: v3.2 (Inline Enhanced)"
+    msg = "🚀 <b>TB_LOADER</b> — ✨ <i>Developed by</i> <b>MASHRAFI HAQUE</b> ✨\n🛠 <b>Version:</b> `v4.0` 🔥"
     if msg_id:
         await bot.edit_message_text(msg, chat_id, msg_id, parse_mode="HTML", reply_markup=markup)
     else:
@@ -594,9 +594,9 @@ async def download_worker(worker_id:int):
                 with open(final_path, "rb") as fh:
                     title = info.get("title", "Your file")
                     if media_type == "audio":
-                        await bot.send_audio(chat_id, fh, reply_to_message_id=reply_to_user_msgid or status_id, caption=f"🎵 <b>{title}</b> — TB_Loader Pro+", parse_mode="HTML")
+                        await bot.send_audio(chat_id, fh, reply_to_message_id=reply_to_user_msgid or status_id, caption=f"🎵 <b>{title}</b> — \n<b>TB_Loader</b>", parse_mode="HTML")
                     else:
-                        await bot.send_video(chat_id, fh, supports_streaming=True, reply_to_message_id=reply_to_user_msgid or status_id, caption=f"🎬 <b>{title}</b> — TB_Loader Pro+", parse_mode="HTML")
+                        await bot.send_video(chat_id, fh, supports_streaming=True, reply_to_message_id=reply_to_user_msgid or status_id, caption=f"🎬 <b>{title}</b> — \n<b>TB_Loader</b>", parse_mode="HTML")
                 try:
                     await bot.edit_message_text("✅ <b>Sent successfully! Enjoy! 🎉</b>", chat_id, status_id, parse_mode="HTML")
                 except:
@@ -665,6 +665,7 @@ if __name__ == "__main__":
         print("Main loop stopped:", e)
     finally:
         save_usage()
+
 
 
 
