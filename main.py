@@ -25,8 +25,8 @@ from keep_alive import keep_alive
 keep_alive() # Flask server for uptime
 
 # ===== Config =====
-USAGE_FILE = "usage.json"
-INSTA_FILE = "insta_usage.json"
+USAGE_FILE = "/mnt/data/usage.json"
+INSTA_FILE = "/mnt/data/insta_usage.json"
 URL_TTL_SECONDS = 60 * 60  # 1 hour
 MAX_URL_STORAGE = 2000
 MAX_WORKERS = 12
@@ -53,9 +53,6 @@ lock = asyncio.Lock()
 url_storage = {}  # key -> {url, created_at, platform, msg_id, inline(bool), orig_msg_id}
 cooldown = {}     # user_id -> last_request_ts
 
-# ===== Persistent usage load/save =====
-USAGE_FILE = "usage.json"
-INSTA_FILE = "insta_usage.json"
 
 # ===== Persistent usage load/save =====
 def load_usage():
@@ -665,6 +662,7 @@ if __name__ == "__main__":
         print("Main loop stopped:", e)
     finally:
         save_usage()
+
 
 
 
