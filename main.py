@@ -320,22 +320,16 @@ async def link_worker(chat_id, reply_to_msgid, final_path, size_mb, info):
         token, link = register_download_link(final_path)
         title = info.get("title", "Your file")
 
-        # ✅ clickable hyperlink (always works)
-        hyperlink = f'<a href="{link}">⬇️ Click Here to Download</a>'
+        # ✅ short url (hide your domain)
+        short_link = await shorten_url(link)
 
         msg = (
             f"🔗 <b>Direct Download Link</b>\n"
             f"📌 <b>{title}</b>\n"
-            f"📦 Size: <i>{size_mb:.1f} MB</i>\n\n"
-            f"✅ <i>Valid for {DOWNLOAD_LINK_TTL//60} min</i>\n\n"
-            f"{hyperlink}\n\n"
-            f"<code>{link}</code>"
-        )
-
-        # ✅ try button
-        markup = InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            InlineKeyboardButton("⬇️ Download Now", url=link)
+            f"📦 Size: <i>{size_mb:.1f} MB</i>\n"
+            f"⏳ Valid: <i>{DOWNLOAD_LINK_TTL//60} min</i>\n\n"
+            f"✅ Copy link below (tap to copy):\n"
+            f"<code>{short_link}</code>"
         )
 
         await bot.send_message(
@@ -343,19 +337,20 @@ async def link_worker(chat_id, reply_to_msgid, final_path, size_mb, info):
             msg,
             parse_mode="HTML",
             reply_to_message_id=reply_to_msgid,
-            reply_markup=markup,
             disable_web_page_preview=True
         )
 
     except Exception as e:
         print("link_worker error:", e)
 
-        # ✅ fallback: normal clickable link
+        # ✅ fallback (if shortener fails)
         try:
             await bot.send_message(
                 chat_id,
-                f"🔗 Download link:\n{link}",
-                reply_to_message_id=reply_to_msgid
+                f"🔗 Download link:\n<code>{link}</code>",
+                parse_mode="HTML",
+                reply_to_message_id=reply_to_msgid,
+                disable_web_page_preview=True
             )
         except:
             pass
@@ -755,4 +750,5 @@ if __name__ == "__main__":
         print("Main loop stopped:", e)
     finally:
         save_usage()
+
 
