@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # TB_LOADER PRO+ (v3.2) — Inline Enhanced (Fixed thumbnail)
 # ✅ MODIFIED:
-# - YouTube removed (already)
 # - /mnt/data -> /tmp/data (Render compatible)
 # - Parallel workers:
-#   (1) link_worker sends direct download link FAST
+#   (1) link_worker prepares server-based direct download link (valid 5 min)
 #   (2) download_worker downloads with yt-dlp and sends if <=50MB
+# ✅ No feature removed. Same style preserved.
 
 import os
 import time
@@ -24,7 +24,6 @@ from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from keep_alive import keep_alive
-keep_alive()  # Flask server for uptime
 
 # ===== Config =====
 DATA_DIR = "/tmp/data"
@@ -33,15 +32,20 @@ os.makedirs(DATA_DIR, exist_ok=True)
 USAGE_FILE = f"{DATA_DIR}/usage.json"
 INSTA_FILE = f"{DATA_DIR}/insta_usage.json"
 
-URL_TTL_SECONDS = 60 * 60  # 1 hour
+URL_TTL_SECONDS = 60 * 60
 MAX_URL_STORAGE = 2000
 MAX_WORKERS = 12
-MAX_LINK_WORKERS = 3   # ✅ fast worker for link extraction
+MAX_LINK_WORKERS = 3
 TMP_CLEAN_INTERVAL = 3600
 COOLDOWN_SECONDS = 3
 MAX_INSTA_PER_DAY = 10
 MAX_SEND_MB = 50
 TMP_DIR = "/tmp"
+
+# ✅ Direct download link system config
+DOWNLOAD_DIR = "/tmp/downloads"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+DOWNLOAD_TTL = 300  # ✅ 5 minutes
 
 # ===== Load .env =====
 load_dotenv()
@@ -49,17 +53,28 @@ API_TOKEN = os.getenv("API_TOKEN")
 if not API_TOKEN:
     raise RuntimeError("API_TOKEN not found in .env!")
 
+# ✅ Render / server base url
+BASE_URL = os.getenv("BASE_URL", "").strip().rstrip("/")
+# example: https://your-app.onrender.com
+# If not set, it will still work but link might be wrong.
+
 bot = AsyncTeleBot(API_TOKEN)
 
 # ===== Globals =====
 FFMPEG_EXISTS = shutil.which("ffmpeg") is not None
 download_queue = asyncio.Queue(maxsize=500)
-link_queue = asyncio.Queue(maxsize=500)  # ✅ new queue for direct link worker
+link_queue = asyncio.Queue(maxsize=500)
 insta_usage = {}
 user_data = {}
 lock = asyncio.Lock()
-url_storage = {}   # key -> {url, created_at, platform, msg_id, inline, orig_msg_id, link_sent}
+url_storage = {}
 cooldown = {}
+
+# ✅ Token -> {path, expires}
+download_links = {}
+
+# ✅ Start keep_alive with injected dict
+keep_alive(download_links, DOWNLOAD_TTL)
 
 
 # ===== Persistent usage load/save =====
@@ -126,6 +141,7 @@ signal.signal(signal.SIGINT, _handle_exit)
 signal.signal(signal.SIGTERM, _handle_exit)
 load_usage()
 
+
 # ===== Helpers =====
 def short_hash(s: str) -> str:
     return hashlib.md5(s.encode("utf-8")).hexdigest()[:12]
@@ -157,6 +173,31 @@ def cleanup_url_storage():
     to_del = [k for k, v in url_storage.items() if now - v.get("created_at", 0) > URL_TTL_SECONDS]
     for k in to_del:
         url_storage.pop(k, None)
+
+
+# ✅ token based link cleanup
+def cleanup_download_links():
+    now = time.time()
+    expired = [t for t, rec in download_links.items() if now > rec.get("expires", 0)]
+    for t in expired:
+        rec = download_links.get(t)
+        if rec:
+            try:
+                os.remove(rec.get("path"))
+            except:
+                pass
+        download_links.pop(t, None)
+
+
+def make_download_token():
+    return short_hash(str(time.time()) + os.urandom(8).hex())
+
+
+def make_public_download_url(token: str):
+    if BASE_URL:
+        return f"{BASE_URL}/d/{token}"
+    # fallback: still return relative
+    return f"/d/{token}"
 
 
 # ===== Inline Keyboard Command Helpers (EDIT IN PLACE) =====
@@ -410,15 +451,15 @@ async def handle_callback(call):
 
         # ✅ Parallel work: enqueue both
         job = (chat_id, url, platform, msg_id_to_edit, call.from_user.id, media_type, rec.get("orig_msg_id", None), key)
-        await link_queue.put(job)      # fast direct link
-        await download_queue.put(job)  # slow download + send if <=50MB
+        await link_queue.put(job)
+        await download_queue.put(job)
 
     except Exception as e:
         print("Callback error:", e)
         await bot.send_message(call.message.chat.id, "❌ <b>Error!</b> Try again.", parse_mode="HTML")
 
 
-# ✅ FAST worker: send direct download link immediately
+# ✅ FAST worker: give instant feedback + create server link after download is ready
 async def link_worker(worker_id: int):
     while True:
         chat_id, url, platform, status_id, user_id, media_type, reply_to_user_msgid, url_key = await link_queue.get()
@@ -428,70 +469,12 @@ async def link_worker(worker_id: int):
                 link_queue.task_done()
                 continue
 
-            # extract direct url (no download)
-            opts = {
-                "quiet": True,
-                "no_warnings": True,
-                "skip_download": True,
-                "noplaylist": True,
-            }
-
-            # for audio try to prefer bestaudio
-            if media_type == "audio":
-                opts["format"] = "bestaudio/best"
-            else:
-                opts["format"] = "best[ext=mp4]/best"
-
-            direct_url = None
-            title = None
-
-            try:
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = await asyncio.to_thread(ydl.extract_info, url, download=False)
-
-                if isinstance(info, dict):
-                    title = info.get("title")
-                    direct_url = info.get("url")
-
-                    if not direct_url:
-                        rfs = info.get("requested_formats") or []
-                        if isinstance(rfs, list) and len(rfs) > 0:
-                            direct_url = rfs[0].get("url")
-
-            except Exception as e:
-                print("link_worker extract error:", e)
-
-            if direct_url:
-                rec["link_sent"] = True
-                url_storage[url_key] = rec
-
-                # shorten for display only
-                short = await shorten_url(direct_url)
-
-                await bot.send_message(
-                    chat_id,
-                    f"⚡ <b>Instant Download Link Ready</b>\n"
-                    f"📌 {('🎵 Audio' if media_type=='audio' else '🎬 Video')}\n"
-                    f"{f'🎞 <b>{title}</b>\\n' if title else ''}"
-                    f"🔗 <code>{short}</code>\n\n"
-                    f"✅ Copy this link & open in browser to download.\n"
-                    f"⏳ Meanwhile, bot will try to send file if under {MAX_SEND_MB}MB.",
-                    parse_mode="HTML",
-                    disable_web_page_preview=True
-                )
-            else:
-                # fallback: send original url
-                if not rec.get("link_sent"):
-                    rec["link_sent"] = True
-                    url_storage[url_key] = rec
-                    await bot.send_message(
-                        chat_id,
-                        "⚠️ <b>Direct link not available now</b>\n"
-                        "✅ Please open the original link:\n"
-                        f"<code>{url}</code>",
-                        parse_mode="HTML",
-                        disable_web_page_preview=True
-                    )
+            # ✅ quick feedback
+            await bot.send_message(
+                chat_id,
+                "⚡ <b>Preparing direct download link...</b>\n⏳ Please wait a moment...",
+                parse_mode="HTML"
+            )
 
         except Exception as e:
             print("link_worker error:", e)
@@ -499,7 +482,7 @@ async def link_worker(worker_id: int):
             link_queue.task_done()
 
 
-# ===== Download Worker (same as your old logic, only HTML fallback optional) =====
+# ===== Download Worker (downloads file; sends Telegram if <=50MB; always creates 5min link) =====
 async def download_worker(worker_id: int):
     while True:
         chat_id, url, platform, status_id, user_id, media_type, reply_to_user_msgid, url_key = await download_queue.get()
@@ -522,7 +505,6 @@ async def download_worker(worker_id: int):
                 else:
                     ydl_opts["format"] = "bestaudio/best"
             else:
-                # ✅ safer on render without ffmpeg merge
                 ydl_opts["format"] = "best[ext=mp4]/best"
 
             info = None
@@ -554,6 +536,42 @@ async def download_worker(worker_id: int):
 
             size_mb = os.path.getsize(final_path) / (1024 * 1024)
 
+            # ✅ Always create server-based link valid 5 min
+            cleanup_download_links()
+            token = make_download_token()
+
+            # Move file into DOWNLOAD_DIR for serving
+            safe_name = f"{token}_{os.path.basename(final_path)}"
+            served_path = os.path.join(DOWNLOAD_DIR, safe_name)
+            shutil.move(final_path, served_path)
+
+            download_links[token] = {
+                "path": served_path,
+                "expires": time.time() + DOWNLOAD_TTL
+            }
+
+            direct_link = make_public_download_url(token)
+            short_link = await shorten_url(direct_link) if direct_link.startswith("http") else direct_link
+
+            # ✅ Mark link_sent for this url_key
+            rec = url_storage.get(url_key, {})
+            rec["link_sent"] = True
+            url_storage[url_key] = rec
+
+            title = info.get("title", "Your file")
+
+            await bot.send_message(
+                chat_id,
+                f"✅ <b>Direct Download Link Ready (Valid 5 min)</b>\n"
+                f"📌 {('🎵 Audio' if media_type=='audio' else '🎬 Video')}\n"
+                f"🎞 <b>{title}</b>\n"
+                f"🔗 <code>{short_link}</code>\n\n"
+                f"⏳ Link will expire in <b>5 minutes</b>.",
+                parse_mode="HTML",
+                disable_web_page_preview=True
+            )
+
+            # ✅ Thumbnail (audio only)
             thumb = None
             if media_type == "audio" and isinstance(info, dict):
                 thumb = info.get("thumbnail")
@@ -572,13 +590,13 @@ async def download_worker(worker_id: int):
             except:
                 pass
 
-            # ✅ if big, just inform (link already sent by link_worker)
+            # ✅ Send to Telegram only if <=50MB
             if size_mb > MAX_SEND_MB:
                 try:
                     await bot.edit_message_text(
                         f"⚠️ <b>File too large for Telegram</b>\n"
                         f"📦 Size: <b>{size_mb:.1f} MB</b>\n\n"
-                        f"✅ I already sent you an instant download link above.",
+                        f"✅ Download link already sent above.",
                         chat_id, status_id, parse_mode="HTML"
                     )
                 except:
@@ -589,8 +607,7 @@ async def download_worker(worker_id: int):
                 except:
                     pass
 
-                with open(final_path, "rb") as fh:
-                    title = info.get("title", "Your file")
+                with open(served_path, "rb") as fh:
                     if media_type == "audio":
                         await bot.send_audio(chat_id, fh, reply_to_message_id=reply_to_user_msgid or status_id,
                                              caption=f"🎵 <b>{title}</b> — \n<b>TB_Loader</b>", parse_mode="HTML")
@@ -604,6 +621,7 @@ async def download_worker(worker_id: int):
                 except:
                     pass
 
+            # ✅ Update stats
             uid = str(user_id)
             ud = user_data.get(uid, {"downloads": 0, "total_mb": 0.0, "last_download": None})
             ud["downloads"] += 1
@@ -623,21 +641,6 @@ async def download_worker(worker_id: int):
                     pass
 
         finally:
-            try:
-                for f in os.listdir(TMP_DIR):
-                    if f.startswith(os.path.basename(tmp_base)) or f.startswith(f"m_{chat_id}_{status_id}"):
-                        try:
-                            os.remove(os.path.join(TMP_DIR, f))
-                        except:
-                            pass
-            except:
-                pass
-
-            try:
-                url_storage.pop(url_key, None)
-            except:
-                pass
-
             download_queue.task_done()
 
 
@@ -645,6 +648,7 @@ async def download_worker(worker_id: int):
 async def tmp_cleaner():
     while True:
         try:
+            cleanup_download_links()
             now = time.time()
             for f in os.listdir(TMP_DIR):
                 path = os.path.join(TMP_DIR, f)
@@ -664,9 +668,7 @@ async def tmp_cleaner():
 async def main():
     print("🚀 TB_LOADER PRO+ v3.2 — Starting...")
 
-    # download workers
     workers = [asyncio.create_task(download_worker(i)) for i in range(MAX_WORKERS)]
-    # link workers (fast)
     link_workers = [asyncio.create_task(link_worker(i)) for i in range(MAX_LINK_WORKERS)]
 
     asyncio.create_task(tmp_cleaner())
