@@ -2,7 +2,7 @@
 # TB_LOADER PRO+ (v3.2) — Inline Enhanced (Fixed thumbnail)
 # Features: inline single-link edit, batch links, tmp cleaner, usage persist, thumbnail fix,
 # HTML fallback for >50MB, ffmpeg detection, cookie fallback, cooldown, insta limit, graceful shutdown.
-# ✅ NEW UPDATE: Always send direct download link (expires in 5 min) + parallel send worker
+# ✅ NEW UPDATE: Always send direct download link (expires in 5 min) + parallel send worker + inline buttons
 
 import os
 import time
@@ -38,11 +38,13 @@ TMP_DIR = "/tmp"
 
 # ✅ Direct Download Link Config
 DOWNLOAD_LINK_TTL = 300  # 5 min
-PUBLIC_URL = os.getenv("PUBLIC_URL", "").rstrip("/")  # set in .env
 
 # ===== Load .env =====
 load_dotenv()
+
 API_TOKEN = os.getenv("API_TOKEN")
+PUBLIC_URL = os.getenv("PUBLIC_URL", "").rstrip("/")  # ✅ FIX: load AFTER dotenv
+
 if not API_TOKEN:
     raise RuntimeError("API_TOKEN not found in .env!")
 
@@ -162,6 +164,7 @@ def register_download_link(filepath: str):
         return token, f"{PUBLIC_URL}/d/{token}"
     return token, f"/d/{token}"
 
+
 # ===== Inline Keyboard Command Helpers (EDIT IN PLACE) =====
 async def send_start_keyboard(chat_id, msg_id=None):
     markup = InlineKeyboardMarkup(row_width=3)
@@ -259,7 +262,7 @@ async def send_convert_audio_keyboard(chat_id, msg_id=None):
         return sent.message_id
 
 
-# ===== Bot commands (updated to use edit-in-place) =====
+# ===== Bot commands =====
 @bot.message_handler(commands=["start"])
 async def start(m):
     await send_start_keyboard(m.chat.id)
@@ -281,7 +284,7 @@ async def convert_audio(m):
     await send_convert_audio_keyboard(m.chat.id)
 
 
-# ===== Inline callback handler for menu navigation (edit in place) =====
+# ===== Inline callback handler for menu navigation =====
 @bot.callback_query_handler(func=lambda c: c.data in ["start","profile","help","stats","about","convert"])
 async def inline_commands(call):
     await bot.answer_callback_query(call.id)
@@ -310,7 +313,10 @@ async def link_worker(chat_id, reply_to_msgid, final_path, size_mb, info):
         token, link = register_download_link(final_path)
         title = info.get("title", "Your file")
 
-        # ✅ Android Chrome Force URL (works only android)
+        # ✅ ensure absolute URL
+        if not link.startswith("http") and PUBLIC_URL:
+            link = f"{PUBLIC_URL}{link}"
+
         chrome_link = f"intent://{link.replace('https://','').replace('http://','')}#Intent;scheme=https;package=com.android.chrome;end;"
 
         msg = (
@@ -374,166 +380,6 @@ async def send_worker(chat_id, status_id, reply_to_msgid, final_path, size_mb, i
         print("send_worker error:", e)
 
 
-# ===== Convert video->audio feature (UNCHANGED) =====
-@bot.message_handler(content_types=["video", "document"])
-async def handle_video_file(message):
-    file_info = None
-    file_id = None
-    if message.video:
-        file_info = message.video
-        file_id = file_info.file_id
-    elif message.document and message.document.mime_type.startswith("video/"):
-        file_info = message.document
-        file_id = file_info.file_id
-    else:
-        return
-
-    key = short_hash(file_id + str(time.time()))
-    markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        InlineKeyboardButton("🎵 Convert to Audio (MP3)", callback_data=f"convert_{key}")
-    )
-
-    url_storage[key] = {
-        "file_id": file_id,
-        "chat_id": message.chat.id,
-        "file_name": getattr(file_info, "file_name", "video")
-    }
-
-    status_msg = await bot.send_message(
-        message.chat.id,
-        "✅ Video received! Tap below to convert to audio:",
-        reply_markup=markup
-    )
-    url_storage[key]["status_msg_id"] = status_msg.message_id
-
-
-@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("convert_"))
-async def handle_convert_callback(call):
-    await bot.answer_callback_query(call.id)
-    key = call.data.split("_", 1)[1]
-    rec = url_storage.get(key)
-    if not rec:
-        await bot.send_message(call.message.chat.id, "❌ Video expired or missing!")
-        return
-
-    chat_id = rec["chat_id"]
-    file_id = rec["file_id"]
-    file_name = rec.get("file_name", "video")
-    msg_id = rec.get("status_msg_id")
-    tmp_file = os.path.join(TMP_DIR, f"{key}.mp4")
-    output_file = os.path.join(TMP_DIR, f"{key}.mp3")
-
-    try:
-        await bot.edit_message_text("⏳ Downloading video...", chat_id, msg_id)
-
-        file_info = await bot.get_file(file_id)
-        file_path = file_info.file_path
-        file_url = f"https://api.telegram.org/file/bot{API_TOKEN}/{file_path}"
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(file_url) as resp:
-                if resp.status == 200:
-                    f = await aiofiles.open(tmp_file, mode='wb')
-                    await f.write(await resp.read())
-                    await f.close()
-                else:
-                    raise Exception(f"Failed to download, status {resp.status}")
-
-        if FFMPEG_EXISTS:
-            cmd = f'ffmpeg -y -i "{tmp_file}" -vn -ab 192k -ar 44100 -f mp3 "{output_file}"'
-            os.system(cmd)
-        else:
-            await bot.send_message(chat_id, "⚠️ FFmpeg not installed. Cannot convert.")
-            return
-
-        await bot.edit_message_text("📤 Conversion complete! Sending audio...", chat_id, msg_id)
-
-        async with aiofiles.open(output_file, "rb") as f:
-            await bot.send_audio(chat_id, f, caption=f"🎵 {file_name} — Converted to MP3")
-
-    except Exception as e:
-        print("Conversion error:", e)
-        await bot.edit_message_text("❌ Conversion failed!", chat_id, msg_id)
-    finally:
-        for f in [tmp_file, output_file]:
-            try: os.remove(f)
-            except: pass
-        if key in url_storage:
-            url_storage.pop(key, None)
-
-
-# ===== Message handler =====
-@bot.message_handler(func=lambda m: True)
-async def handle_message(message):
-    text = (message.text or "").strip()
-    if not text:
-        await bot.reply_to(message, "❌ <b>No valid link found!</b>", parse_mode="HTML")
-        return
-
-    uid = message.from_user.id
-    now = time.time()
-    last_ts = cooldown.get(uid, 0)
-    if now - last_ts < COOLDOWN_SECONDS:
-        await bot.reply_to(message, f"⏳ Please wait {COOLDOWN_SECONDS} seconds between requests.")
-        return
-    cooldown[uid] = now
-
-    links = [l.strip() for l in text.split() if l.strip().startswith(("http://","https://"))]
-    if not links:
-        await bot.reply_to(message, "❌ <b>No valid link found!</b> Send Instagram/Twitter/Facebook/TikTok link 🔗", parse_mode="HTML")
-        return
-
-    single = len(links) == 1
-
-    for url in links:
-        platform = detect_platform(url)
-        if not platform:
-            await bot.reply_to(message, f"⚠️ <b>Unsupported link:</b>\n{url}", parse_mode="HTML")
-            continue
-
-        async with lock:
-            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            user_key = str(uid)
-            rec = insta_usage.get(user_key, {})
-            if rec.get("day") != today:
-                rec = {"count": 0, "day": today}
-            if platform == "instagram":
-                if rec["count"] >= MAX_INSTA_PER_DAY:
-                    await bot.reply_to(message, "🚫 <b>Instagram limit:</b> 10/day\n<i>Try tomorrow ⏰</i>", parse_mode="HTML")
-                    continue
-                rec["count"] += 1
-            insta_usage[user_key] = rec
-            save_usage()
-
-        key = short_hash(url + str(time.time()))
-        callback_data = f"{key}_{platform}_{message.message_id}"
-        markup = InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            InlineKeyboardButton("🎬 Video", callback_data=f"v_{callback_data}"),
-            InlineKeyboardButton("🎵 Audio", callback_data=f"a_{callback_data}")
-        )
-
-        pmap = {"instagram":"Instagram","twitter":"Twitter/X","facebook":"Facebook","tiktok":"TikTok"}
-
-        if single:
-            sent = await bot.send_message(message.chat.id,
-                f"✅ <b>{pmap[platform]}</b> Detected!\n<i>Choose format below 👇</i>",
-                reply_markup=markup,
-                parse_mode="HTML"
-            )
-            url_storage[key] = {"url": url, "created_at": time.time(), "platform": platform, "msg_id": sent.message_id, "inline": True, "orig_msg_id": message.message_id}
-        else:
-            sent = await bot.reply_to(message,
-                f"✅ <b>{pmap[platform]}</b> Detected!\n<i>Choose format below 👇</i>",
-                reply_markup=markup,
-                parse_mode="HTML"
-            )
-            url_storage[key] = {"url": url, "created_at": time.time(), "platform": platform, "msg_id": sent.message_id, "inline": False, "orig_msg_id": message.message_id}
-
-    if len(url_storage) > MAX_URL_STORAGE:
-        cleanup_url_storage()
-
 # ===== Callback handler =====
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith(("v_","a_")))
 async def handle_callback(call):
@@ -562,12 +408,14 @@ async def handle_callback(call):
             msg_id_to_edit = status_msg.message_id
 
         await download_queue.put((chat_id, url, platform, msg_id_to_edit, call.from_user.id, media_type, rec.get("orig_msg_id", None), key))
+
     except Exception as e:
         print("Callback error:", e)
         try:
             await bot.send_message(call.message.chat.id, "❌ <b>Error!</b> Try again.", parse_mode="HTML")
         except:
             pass
+
 
 # ===== Download Worker =====
 async def download_worker(worker_id: int):
@@ -598,12 +446,10 @@ async def download_worker(worker_id: int):
                 else:
                     ydl_opts["format"] = "best"
 
-            # ===== Download using yt-dlp =====
             info = None
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = await asyncio.to_thread(ydl.extract_info, url, download=True)
 
-            # ===== Cookie fallback =====
             if not info:
                 cookie_file = f"{platform}_cookies.txt"
                 if os.path.exists(cookie_file):
@@ -614,10 +460,8 @@ async def download_worker(worker_id: int):
             if not info:
                 raise Exception("Download failed (no info)")
 
-            # ===== Detect downloaded file path =====
             ext = info.get("ext", "mp4") if media_type == "video" else "mp3"
             candidate = f"{tmp_base}.{ext}"
-
             if os.path.exists(candidate):
                 final_path = candidate
             else:
@@ -631,7 +475,7 @@ async def download_worker(worker_id: int):
 
             size_mb = os.path.getsize(final_path) / (1024 * 1024)
 
-            # ===== Thumbnail fix: don't send thumbnail for video =====
+            # Thumbnail fix
             thumb = None
             if media_type == "audio" and isinstance(info, dict):
                 thumb = info.get("thumbnail")
@@ -642,7 +486,7 @@ async def download_worker(worker_id: int):
                 except:
                     pass
 
-            # ===== Update status message before sending =====
+            # Status update
             try:
                 await bot.edit_message_text(
                     f"⚙️ <b>Processing complete!</b>\n"
@@ -653,7 +497,7 @@ async def download_worker(worker_id: int):
             except:
                 pass
 
-            # ✅ Parallel tasks (Link FIRST)
+            # Parallel tasks
             link_task = asyncio.create_task(
                 link_worker(chat_id, reply_to_user_msgid or status_id, final_path, size_mb, info)
             )
@@ -661,11 +505,10 @@ async def download_worker(worker_id: int):
                 send_worker(chat_id, status_id, reply_to_user_msgid, final_path, size_mb, info, media_type)
             )
 
-            # ✅ Link always first
             await link_task
             await send_task
 
-            # ✅ Final status update (so "Generating link..." won't stay)
+            # Final status update
             try:
                 if size_mb > MAX_SEND_MB:
                     await bot.edit_message_text(
@@ -686,7 +529,7 @@ async def download_worker(worker_id: int):
             except:
                 pass
 
-            # ===== Update usage stats =====
+            # usage stats
             uid = str(user_id)
             ud = user_data.get(uid, {"downloads": 0, "total_mb": 0.0, "last_download": None})
             ud["downloads"] = ud.get("downloads", 0) + 1
@@ -706,14 +549,13 @@ async def download_worker(worker_id: int):
                     pass
 
         finally:
-            # ✅ DO NOT delete final_path here (direct link needs it for 5 min)
             try:
                 if url_key in url_storage:
                     url_storage.pop(url_key, None)
             except:
                 pass
-
             download_queue.task_done()
+
 
 # ===== Background tmp cleaner (updated for link files) =====
 async def tmp_cleaner():
@@ -721,7 +563,7 @@ async def tmp_cleaner():
         try:
             now = time.time()
 
-            # ✅ remove expired link files & dict entries
+            # remove expired link files
             for token, rec in list(download_links.items()):
                 if time.time() > rec.get("expires", 0):
                     try:
@@ -731,11 +573,11 @@ async def tmp_cleaner():
                         pass
                     download_links.pop(token, None)
 
-            # ✅ clean other old tmp files (but not active download link files)
+            # clean other old tmp files
             for f in os.listdir(TMP_DIR):
                 path = os.path.join(TMP_DIR, f)
                 try:
-                    # ✅ skip active link files
+                    # skip active link files
                     active = False
                     for token, rec in list(download_links.items()):
                         if rec.get("path") == path and time.time() <= rec.get("expires", 0):
@@ -744,13 +586,12 @@ async def tmp_cleaner():
                     if active:
                         continue
 
-                    # ✅ remove old temp files
                     if os.path.isfile(path) and os.path.getmtime(path) < now - TMP_CLEAN_INTERVAL and (
                         f.startswith("dl_") or f.endswith(".tmp") or f.endswith(".html")
                     ):
                         os.remove(path)
 
-                except Exception:
+                except:
                     pass
 
         except Exception as e:
@@ -774,4 +615,3 @@ if __name__ == "__main__":
         print("Main loop stopped:", e)
     finally:
         save_usage()
-
