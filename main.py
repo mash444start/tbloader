@@ -309,15 +309,36 @@ async def link_worker(chat_id, reply_to_msgid, final_path, size_mb, info):
     try:
         token, link = register_download_link(final_path)
         title = info.get("title", "Your file")
+
+        # ✅ Android Chrome Force URL (works only android)
+        chrome_link = f"intent://{link.replace('https://','').replace('http://','')}#Intent;scheme=https;package=com.android.chrome;end;"
+
         msg = (
             f"🔗 <b>Direct Download Link</b>\n"
             f"📌 <b>{title}</b>\n"
             f"📦 Size: <i>{size_mb:.1f} MB</i>\n\n"
-            f"✅ Link (valid {DOWNLOAD_LINK_TTL//60} min):\n{link}"
+            f"✅ Link (valid {DOWNLOAD_LINK_TTL//60} min):\n{link}\n\n"
+            f"⚡ <i>If it opens in Telegram Web, tap ⋮ → Open in Browser</i>"
         )
-        await bot.send_message(chat_id, msg, parse_mode="HTML", reply_to_message_id=reply_to_msgid)
+
+        markup = InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            InlineKeyboardButton("⬇️ Download Now", url=link),
+            InlineKeyboardButton("🌐 Open in Chrome (Android)", url=chrome_link)
+        )
+
+        await bot.send_message(
+            chat_id,
+            msg,
+            parse_mode="HTML",
+            reply_to_message_id=reply_to_msgid,
+            reply_markup=markup,
+            disable_web_page_preview=True
+        )
+
     except Exception as e:
         print("link_worker error:", e)
+
 
 async def send_worker(chat_id, status_id, reply_to_msgid, final_path, size_mb, info, media_type):
     try:
@@ -549,12 +570,13 @@ async def handle_callback(call):
             pass
 
 # ===== Download Worker =====
-async def download_worker(worker_id:int):
+async def download_worker(worker_id: int):
     while True:
         chat_id, url, platform, status_id, user_id, media_type, reply_to_user_msgid, url_key = await download_queue.get()
         timestamp = int(time.time())
         tmp_base = f"{TMP_DIR}/dl_{chat_id}_{status_id}_{timestamp}"
         final_path = None
+
         try:
             ydl_opts = {
                 "noplaylist": True,
@@ -576,10 +598,12 @@ async def download_worker(worker_id:int):
                 else:
                     ydl_opts["format"] = "best"
 
+            # ===== Download using yt-dlp =====
             info = None
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = await asyncio.to_thread(ydl.extract_info, url, download=True)
 
+            # ===== Cookie fallback =====
             if not info:
                 cookie_file = f"{platform}_cookies.txt"
                 if os.path.exists(cookie_file):
@@ -590,8 +614,10 @@ async def download_worker(worker_id:int):
             if not info:
                 raise Exception("Download failed (no info)")
 
+            # ===== Detect downloaded file path =====
             ext = info.get("ext", "mp4") if media_type == "video" else "mp3"
             candidate = f"{tmp_base}.{ext}"
+
             if os.path.exists(candidate):
                 final_path = candidate
             else:
@@ -603,7 +629,7 @@ async def download_worker(worker_id:int):
             if not final_path or not os.path.exists(final_path):
                 raise Exception("File not found after download")
 
-            size_mb = os.path.getsize(final_path) / (1024*1024)
+            size_mb = os.path.getsize(final_path) / (1024 * 1024)
 
             # ===== Thumbnail fix: don't send thumbnail for video =====
             thumb = None
@@ -613,18 +639,21 @@ async def download_worker(worker_id:int):
                 try:
                     reply_to = reply_to_user_msgid or status_id
                     await bot.send_photo(chat_id, thumb, reply_to_message_id=reply_to)
-                except Exception:
+                except:
                     pass
 
+            # ===== Update status message before sending =====
             try:
                 await bot.edit_message_text(
-                    f"⚙️ <b>Processing complete!</b>\nSize: <i>{size_mb:.1f} MB</i>\n🔗 Generating link...",
+                    f"⚙️ <b>Processing complete!</b>\n"
+                    f"Size: <i>{size_mb:.1f} MB</i>\n"
+                    f"🔗 Generating link...",
                     chat_id, status_id, parse_mode="HTML"
                 )
             except:
                 pass
 
-            # ✅ Parallel start but guaranteed link FIRST
+            # ✅ Parallel tasks (Link FIRST)
             link_task = asyncio.create_task(
                 link_worker(chat_id, reply_to_user_msgid or status_id, final_path, size_mb, info)
             )
@@ -632,12 +661,34 @@ async def download_worker(worker_id:int):
                 send_worker(chat_id, status_id, reply_to_user_msgid, final_path, size_mb, info, media_type)
             )
 
+            # ✅ Link always first
             await link_task
             await send_task
 
+            # ✅ Final status update (so "Generating link..." won't stay)
+            try:
+                if size_mb > MAX_SEND_MB:
+                    await bot.edit_message_text(
+                        "✅ <b>Link generated!</b>\n"
+                        "⚠️ <i>File too large for Telegram</i>\n"
+                        "⬇️ Use the download link above 👆",
+                        chat_id, status_id,
+                        parse_mode="HTML"
+                    )
+                else:
+                    await bot.edit_message_text(
+                        "✅ <b>Completed!</b>\n"
+                        "🔗 Link sent ✅\n"
+                        "📤 File sent successfully 🎉",
+                        chat_id, status_id,
+                        parse_mode="HTML"
+                    )
+            except:
+                pass
+
             # ===== Update usage stats =====
             uid = str(user_id)
-            ud = user_data.get(uid, {"downloads":0, "total_mb":0.0, "last_download": None})
+            ud = user_data.get(uid, {"downloads": 0, "total_mb": 0.0, "last_download": None})
             ud["downloads"] = ud.get("downloads", 0) + 1
             ud["total_mb"] = ud.get("total_mb", 0.0) + size_mb
             ud["last_download"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -653,6 +704,7 @@ async def download_worker(worker_id:int):
                     await bot.send_message(chat_id, "❌ <b>Download failed!</b>\nTry again", parse_mode="HTML")
                 except:
                     pass
+
         finally:
             # ✅ DO NOT delete final_path here (direct link needs it for 5 min)
             try:
@@ -660,6 +712,7 @@ async def download_worker(worker_id:int):
                     url_storage.pop(url_key, None)
             except:
                 pass
+
             download_queue.task_done()
 
 # ===== Background tmp cleaner (updated for link files) =====
@@ -682,7 +735,7 @@ async def tmp_cleaner():
             for f in os.listdir(TMP_DIR):
                 path = os.path.join(TMP_DIR, f)
                 try:
-                    # skip active link files
+                    # ✅ skip active link files
                     active = False
                     for token, rec in list(download_links.items()):
                         if rec.get("path") == path and time.time() <= rec.get("expires", 0):
@@ -691,14 +744,20 @@ async def tmp_cleaner():
                     if active:
                         continue
 
-                    if os.path.isfile(path) and os.path.getmtime(path) < now - TMP_CLEAN_INTERVAL and (f.startswith("dl_") or f.endswith(".tmp")):
+                    # ✅ remove old temp files
+                    if os.path.isfile(path) and os.path.getmtime(path) < now - TMP_CLEAN_INTERVAL and (
+                        f.startswith("dl_") or f.endswith(".tmp") or f.endswith(".html")
+                    ):
                         os.remove(path)
+
                 except Exception:
                     pass
+
         except Exception as e:
             print("tmp_cleaner error:", e)
 
         await asyncio.sleep(TMP_CLEAN_INTERVAL)
+
 
 # ===== Main =====
 async def main():
@@ -715,3 +774,4 @@ if __name__ == "__main__":
         print("Main loop stopped:", e)
     finally:
         save_usage()
+
