@@ -1,4 +1,5 @@
 from flask import Flask, send_file, abort
+from threading import Thread
 import time
 import os
 
@@ -11,18 +12,17 @@ TEMP_LINKS = {}
 def home():
     return "TB Loader is running ✅"
 
-@app.route("/ping", methods=["HEAD", "GET"])
+@app.route("/ping", methods=["GET", "HEAD"])
 def ping():
     return "ok", 200
 
-# ✅ Temporary download link route (valid 5 minutes)
+# ✅ download route
 @app.route("/d/<token>")
 def download_token(token):
     rec = TEMP_LINKS.get(token)
     if not rec:
         return abort(404)
 
-    # expired
     if time.time() > rec["exp"]:
         try:
             os.remove(rec["path"])
@@ -39,9 +39,10 @@ def download_token(token):
     return send_file(path, as_attachment=True)
 
 def keep_alive():
-    from threading import Thread
     def run():
-        app.run(host="0.0.0.0", port=10000)
+        port = int(os.getenv("PORT", 10000))
+        app.run(host="0.0.0.0", port=port)
+
     t = Thread(target=run)
     t.daemon = True
     t.start()
