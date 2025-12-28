@@ -1,47 +1,48 @@
 from flask import Flask, send_file, abort
 from threading import Thread
-import time
 import os
+import time
 
 app = Flask(__name__)
 
-# token -> {"path": str, "exp": float}
-TEMP_LINKS = {}
+# ✅ these will be injected from main.py
+download_links = {}
+DOWNLOAD_TTL = 300  # default 5 min
 
 @app.route("/")
 def home():
-    return "TB Loader is running ✅"
+    return "TB_LOADER Alive ✅"
 
-@app.route("/ping", methods=["GET", "HEAD"])
-def ping():
-    return "ok", 200
-
-# ✅ download route
 @app.route("/d/<token>")
-def download_token(token):
-    rec = TEMP_LINKS.get(token)
+def download_file(token):
+    rec = download_links.get(token)
     if not rec:
         return abort(404)
 
-    if time.time() > rec["exp"]:
+    # expiry check
+    if time.time() > rec.get("expires", 0):
         try:
             os.remove(rec["path"])
         except:
             pass
-        TEMP_LINKS.pop(token, None)
+        download_links.pop(token, None)
         return abort(410)
 
     path = rec["path"]
     if not os.path.exists(path):
-        TEMP_LINKS.pop(token, None)
+        download_links.pop(token, None)
         return abort(404)
 
     return send_file(path, as_attachment=True)
 
-def keep_alive():
-    def run():
-        port = int(os.getenv("PORT", 10000))
-        app.run(host="0.0.0.0", port=port)
+def run():
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+
+def keep_alive(dl_links_ref=None, ttl=300):
+    global download_links, DOWNLOAD_TTL
+    if dl_links_ref is not None:
+        download_links = dl_links_ref
+    DOWNLOAD_TTL = ttl
 
     t = Thread(target=run)
     t.daemon = True
