@@ -320,21 +320,22 @@ async def link_worker(chat_id, reply_to_msgid, final_path, size_mb, info):
         token, link = register_download_link(final_path)
         title = info.get("title", "Your file")
 
-        # ✅ Android Chrome intent forcing
-        clean = link.replace("https://", "").replace("http://", "")
-        chrome_link = f"intent://{clean}#Intent;scheme=https;package=com.android.chrome;end;"
+        # ✅ clickable hyperlink (always works)
+        hyperlink = f'<a href="{link}">⬇️ Click Here to Download</a>'
 
         msg = (
             f"🔗 <b>Direct Download Link</b>\n"
             f"📌 <b>{title}</b>\n"
             f"📦 Size: <i>{size_mb:.1f} MB</i>\n\n"
-            f"✅ <i>Valid for {DOWNLOAD_LINK_TTL//60} min</i>\n"
+            f"✅ <i>Valid for {DOWNLOAD_LINK_TTL//60} min</i>\n\n"
+            f"{hyperlink}\n\n"
+            f"<code>{link}</code>"
         )
 
+        # ✅ try button
         markup = InlineKeyboardMarkup(row_width=1)
         markup.add(
-            InlineKeyboardButton("⬇️ Download Now", url=link),
-            InlineKeyboardButton("🌐 Open in Chrome (Android)", url=chrome_link)
+            InlineKeyboardButton("⬇️ Download Now", url=link)
         )
 
         await bot.send_message(
@@ -348,6 +349,17 @@ async def link_worker(chat_id, reply_to_msgid, final_path, size_mb, info):
 
     except Exception as e:
         print("link_worker error:", e)
+
+        # ✅ fallback: normal clickable link
+        try:
+            await bot.send_message(
+                chat_id,
+                f"🔗 Download link:\n{link}",
+                reply_to_message_id=reply_to_msgid
+            )
+        except:
+            pass
+
 
 
 # ===================================================
@@ -743,3 +755,4 @@ if __name__ == "__main__":
         print("Main loop stopped:", e)
     finally:
         save_usage()
+
