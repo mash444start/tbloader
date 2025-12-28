@@ -1,25 +1,47 @@
-# keep_alive.py
-
-from flask import Flask
-from threading import Thread
+from flask import Flask, send_file, abort
+import time
 import os
 
 app = Flask(__name__)
 
-@app.route('/')
+# token -> {"path": str, "exp": float}
+TEMP_LINKS = {}
+
+@app.route("/")
 def home():
-    return "I am alive!", 200  # Render can use this as basic health check
+    return "TB Loader is running ✅"
 
-@app.route('/ping')
+@app.route("/ping", methods=["HEAD", "GET"])
 def ping():
-    return "pong", 200  # You can use this with UptimeRobot or any external ping tool
+    return "ok", 200
 
-def run():
-    print("[*] Starting Flask keep-alive server...")
-    port = int(os.environ.get("PORT", 8080))  # Render assigns PORT
-    app.run(host='0.0.0.0', port=port)
+# ✅ Temporary download link route (valid 5 minutes)
+@app.route("/d/<token>")
+def download_token(token):
+    rec = TEMP_LINKS.get(token)
+    if not rec:
+        return abort(404)
+
+    # expired
+    if time.time() > rec["exp"]:
+        try:
+            os.remove(rec["path"])
+        except:
+            pass
+        TEMP_LINKS.pop(token, None)
+        return abort(410)
+
+    path = rec["path"]
+    if not os.path.exists(path):
+        TEMP_LINKS.pop(token, None)
+        return abort(404)
+
+    return send_file(path, as_attachment=True)
 
 def keep_alive():
+    from threading import Thread
+    def run():
+        app.run(host="0.0.0.0", port=10000)
     t = Thread(target=run)
     t.daemon = True
     t.start()
