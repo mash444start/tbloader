@@ -2,6 +2,7 @@
 # TB_LOADER PRO+ (v3.2) — Inline Enhanced (Fixed thumbnail)
 # Features: inline single-link edit, batch links, tmp cleaner, usage persist, thumbnail fix, 
 # HTML fallback for >50MB, ffmpeg detection, cookie fallback, cooldown, insta limit, graceful shutdown.
+# ✅ Added: YouTube integration + Render-safe fallback stream URL + FIXED KeyError('youtube')
 
 import os
 import time
@@ -19,10 +20,8 @@ import aiohttp
 from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-
 from keep_alive import keep_alive 
-keep_alive() # Flask server for uptime
+keep_alive()  # Flask server for uptime
 
 # ===== Config =====
 USAGE_FILE = "/mnt/data/usage.json"
@@ -141,6 +140,7 @@ def cleanup_url_storage():
     for k in to_del:
         url_storage.pop(k, None)
 
+
 # ===== Inline Keyboard Command Helpers (EDIT IN PLACE) =====
 async def send_start_keyboard(chat_id, msg_id=None):
     markup = InlineKeyboardMarkup(row_width=3)
@@ -148,12 +148,12 @@ async def send_start_keyboard(chat_id, msg_id=None):
         InlineKeyboardButton("📄 Profile", callback_data="profile"),
         InlineKeyboardButton("ℹ️ Help", callback_data="help"),
         InlineKeyboardButton("📝 About", callback_data="about"),
-        InlineKeyboardButton("🎵 Convert Audio", callback_data="convert")  # New button
+        InlineKeyboardButton("🎵 Convert Audio", callback_data="convert")
     )
 
     msg = (
         "🚀 <b>TB_LOADER v 4.0 PRO</b> — Fast Downloader\n\n"
-        "💎 Supports: <b>Instagram</b> • <b>Twitter/X</b> • <b>Facebook</b> • <b>TikTok</b>\n"
+        "💎 Supports: <b>Instagram</b> • <b>Twitter/X</b> • <b>Facebook</b> • <b>TikTok</b> • <b>YouTube</b>\n"
         "🎬 Video & 🎵 Audio in seconds\n"
         f"⚠️ <i>Files up to {MAX_SEND_MB}MB</i>\n\n"
         "📩 <b>Paste one or more links below (space/newline separated)</b>\n\n"
@@ -164,6 +164,7 @@ async def send_start_keyboard(chat_id, msg_id=None):
     else:
         sent = await bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=markup)
         return sent.message_id
+
 
 async def send_profile_keyboard(chat_id, user_id, msg_id=None):
     uid = str(user_id)
@@ -183,6 +184,7 @@ async def send_profile_keyboard(chat_id, user_id, msg_id=None):
         sent = await bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=markup)
         return sent.message_id
 
+
 async def send_help_keyboard(chat_id, msg_id=None):
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -191,7 +193,7 @@ async def send_help_keyboard(chat_id, msg_id=None):
     )
     msg = (
         "🛠 <b>How to use TB_LOADER</b>\n\n"
-        "• Paste link(s) to Instagram/Twitter/X/Facebook/TikTok\n"
+        "• Paste link(s) to Instagram/Twitter/X/Facebook/TikTok/YouTube\n"
         "• For a single link the bot shows inline buttons (Video / Audio) — tap to start\n"
         "• Use /profile to see your usage, /stats for bot stats\n\n"
         f"Limits: Instagram {MAX_INSTA_PER_DAY}/day per user. Global cooldown: {COOLDOWN_SECONDS}s per user."
@@ -215,7 +217,7 @@ async def send_about_keyboard(chat_id, msg_id=None):
     else:
         sent = await bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=markup)
         return sent.message_id
-    
+
 
 # ===== Convert Audio Keyboard =====
 async def send_convert_audio_keyboard(chat_id, msg_id=None):
@@ -231,11 +233,9 @@ async def send_convert_audio_keyboard(chat_id, msg_id=None):
         "• Use /start to return to main menu"
     )
     if msg_id:
-        
         try:
             await bot.edit_message_text(msg, chat_id, msg_id, parse_mode="HTML", reply_markup=markup)
         except:
-           
             sent = await bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=markup)
             return sent.message_id
     else:
@@ -265,7 +265,6 @@ async def convert_audio(m):
     await send_convert_audio_keyboard(m.chat.id)
 
 
-
 # ===== Inline callback handler for menu navigation (edit in place) =====
 @bot.callback_query_handler(func=lambda c: c.data in ["start","profile","help","stats","about","convert"])
 async def inline_commands(call):
@@ -273,7 +272,7 @@ async def inline_commands(call):
     cmd = call.data
     chat_id = call.message.chat.id
     user_id = call.from_user.id
-    msg_id = call.message.message_id  # Edit this message instead of sending new
+    msg_id = call.message.message_id
 
     if cmd == "start": 
         await send_start_keyboard(chat_id, msg_id)
@@ -284,11 +283,11 @@ async def inline_commands(call):
     elif cmd == "about": 
         await send_about_keyboard(chat_id, msg_id)
     elif cmd == "convert": 
-        await send_convert_audio_keyboard(chat_id, msg_id)  # <-- call your new function
+        await send_convert_audio_keyboard(chat_id, msg_id)
 
 
-
-
+# ===== Convert MP3 from Telegram Video =====
+import aiofiles
 
 @bot.message_handler(content_types=["video", "document"])
 async def handle_video_file(message):
@@ -309,14 +308,12 @@ async def handle_video_file(message):
         InlineKeyboardButton("🎵 Convert to Audio (MP3)", callback_data=f"convert_{key}")
     )
 
-    # Save file info in memory
     url_storage[key] = {
         "file_id": file_id,
         "chat_id": message.chat.id,
         "file_name": getattr(file_info, "file_name", "video")
     }
 
-   
     status_msg = await bot.send_message(
         message.chat.id,
         "✅ Video received! Tap below to convert to audio:",
@@ -325,9 +322,6 @@ async def handle_video_file(message):
     url_storage[key]["status_msg_id"] = status_msg.message_id
 
 
-import aiofiles
-
-# ===== Convert Callback =====
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("convert_"))
 async def handle_convert_callback(call):
     await bot.answer_callback_query(call.id)
@@ -347,12 +341,10 @@ async def handle_convert_callback(call):
     try:
         await bot.edit_message_text("⏳ Downloading video...", chat_id, msg_id)
 
-        # --- Get file info ---
         file_info = await bot.get_file(file_id)
         file_path = file_info.file_path
         file_url = f"https://api.telegram.org/file/bot{API_TOKEN}/{file_path}"
 
-        # --- Download video using aiohttp ---
         async with aiohttp.ClientSession() as session:
             async with session.get(file_url) as resp:
                 if resp.status == 200:
@@ -362,7 +354,6 @@ async def handle_convert_callback(call):
                 else:
                     raise Exception(f"Failed to download, status {resp.status}")
 
-        # --- Convert using ffmpeg ---
         if FFMPEG_EXISTS:
             cmd = f'ffmpeg -y -i "{tmp_file}" -vn -ab 192k -ar 44100 -f mp3 "{output_file}"'
             os.system(cmd)
@@ -371,7 +362,7 @@ async def handle_convert_callback(call):
             return
 
         await bot.edit_message_text("📤 Conversion complete! Sending audio...", chat_id, msg_id)
-        # --- Send audio ---
+
         async with aiofiles.open(output_file, "rb") as f:
             await bot.send_audio(chat_id, f, caption=f"🎵 {file_name} — Converted to MP3")
 
@@ -379,14 +370,11 @@ async def handle_convert_callback(call):
         print("Conversion error:", e)
         await bot.edit_message_text("❌ Conversion failed!", chat_id, msg_id)
     finally:
-        # Cleanup
         for f in [tmp_file, output_file]:
             try: os.remove(f)
             except: pass
         if key in url_storage:
             url_storage.pop(key, None)
-
-
 
 
 # ===== Message handler =====
@@ -407,10 +395,19 @@ async def handle_message(message):
 
     links = [l.strip() for l in text.split() if l.strip().startswith(("http://","https://"))]
     if not links:
-        await bot.reply_to(message, "❌ <b>No valid link found!</b> Send Instagram/Twitter/Facebook/TikTok link 🔗", parse_mode="HTML")
+        await bot.reply_to(message, "❌ <b>No valid link found!</b> Send Instagram/Twitter/Facebook/TikTok/YouTube link 🔗", parse_mode="HTML")
         return
 
     single = len(links) == 1
+
+    # ✅ FIXED pmap (added youtube + safe .get)
+    pmap = {
+        "instagram":"Instagram",
+        "twitter":"Twitter/X",
+        "facebook":"Facebook",
+        "tiktok":"TikTok",
+        "youtube":"YouTube"
+    }
 
     for url in links:
         platform = detect_platform(url)
@@ -423,7 +420,6 @@ async def handle_message(message):
             user_key = str(uid)
             rec = insta_usage.get(user_key, {})
             if rec.get("day") != today:
-                # new day, reset
                 rec = {"count": 0, "day": today}
             if platform == "instagram":
                 if rec["count"] >= MAX_INSTA_PER_DAY:
@@ -431,8 +427,7 @@ async def handle_message(message):
                     continue
                 rec["count"] += 1
             insta_usage[user_key] = rec
-            save_usage() 
-
+            save_usage()
 
         key = short_hash(url + str(time.time()))
         callback_data = f"{key}_{platform}_{message.message_id}"
@@ -442,18 +437,18 @@ async def handle_message(message):
             InlineKeyboardButton("🎵 Audio", callback_data=f"a_{callback_data}")
         )
 
-        pmap = {"instagram":"Instagram","twitter":"Twitter/X","facebook":"Facebook","tiktok":"TikTok"}
+        plat_name = pmap.get(platform, platform.title())
 
         if single:
             sent = await bot.send_message(message.chat.id,
-                f"✅ <b>{pmap[platform]}</b> Detected!\n<i>Choose format below 👇</i>",
+                f"✅ <b>{plat_name}</b> Detected!\n<i>Choose format below 👇</i>",
                 reply_markup=markup,
                 parse_mode="HTML"
             )
             url_storage[key] = {"url": url, "created_at": time.time(), "platform": platform, "msg_id": sent.message_id, "inline": True, "orig_msg_id": message.message_id}
         else:
             sent = await bot.reply_to(message,
-                f"✅ <b>{pmap[platform]}</b> Detected!\n<i>Choose format below 👇</i>",
+                f"✅ <b>{plat_name}</b> Detected!\n<i>Choose format below 👇</i>",
                 reply_markup=markup,
                 parse_mode="HTML"
             )
@@ -461,6 +456,7 @@ async def handle_message(message):
 
     if len(url_storage) > MAX_URL_STORAGE:
         cleanup_url_storage()
+
 
 # ===== Callback handler =====
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith(("v_","a_")))
@@ -497,6 +493,7 @@ async def handle_callback(call):
         except:
             pass
 
+
 # ===== Download Worker =====
 async def download_worker(worker_id:int):
     while True:
@@ -531,7 +528,7 @@ async def download_worker(worker_id:int):
                     info = await asyncio.to_thread(ydl.extract_info, url, download=True)
             except Exception as e:
                 info = None
-                # YouTube datacenter IP blocks are common on free hosting; fallback to stream URL if possible.
+                # ✅ YouTube datacenter IP blocks are common on free hosting; fallback to stream URL if possible.
                 if platform == "youtube":
                     try:
                         with yt_dlp.YoutubeDL({**ydl_opts, "skip_download": True}) as ydl:
@@ -651,6 +648,7 @@ async def download_worker(worker_id:int):
                 pass
             download_queue.task_done()
 
+
 # ===== Background tmp cleaner =====
 async def tmp_cleaner():
     while True:
@@ -667,11 +665,13 @@ async def tmp_cleaner():
             print("tmp_cleaner error:", e)
         await asyncio.sleep(TMP_CLEAN_INTERVAL)
 
+
 # ===== Main =====
 async def main():
     print("🚀 TB_LOADER PRO+ v3.2 — Starting...")
     workers = [asyncio.create_task(download_worker(i)) for i in range(MAX_WORKERS)]
     asyncio.create_task(tmp_cleaner())
+    asyncio.create_task(auto_save_loop())
     await bot.infinity_polling()
 
 
@@ -682,7 +682,3 @@ if __name__ == "__main__":
         print("Main loop stopped:", e)
     finally:
         save_usage()
-
-
-
-
