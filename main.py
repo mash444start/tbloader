@@ -2,11 +2,12 @@
 # TB_LOADER PRO+ (v3.2) — Inline Enhanced (Fixed thumbnail)
 # ✅ FULL FIX:
 # - YouTube platform added safely (no KeyError)
-# - YouTube ALWAYS uses youtube_cookies.txt from first request
-# - Render-safe YouTube fallback:
+# - YouTube ALWAYS uses cookie file from first request
+# - Render Secret File support (path fixed)
+# - YouTube fallback:
 #   (1) try download
-#   (2) if blocked -> try extract stream url
-#   (3) if still blocked -> send manual open link
+#   (2) if blocked -> try stream url
+#   (3) if still blocked -> manual open link
 
 import os
 import time
@@ -39,7 +40,8 @@ MAX_INSTA_PER_DAY = 10
 MAX_SEND_MB = 50
 TMP_DIR = "/tmp"
 
-YOUTUBE_COOKIE_FILE = "youtube_cookies.txt"  # ✅ must exist on server too (Render)
+# ✅ Render Secret File Path (Set this EXACTLY same as Render Secret File path)
+YOUTUBE_COOKIE_FILE = "/opt/render/project/src/youtube_cookies.txt"
 
 # ===== Load .env =====
 load_dotenv()
@@ -497,12 +499,12 @@ async def download_worker(worker_id: int):
                 "outtmpl": f"{tmp_base}.%(ext)s",
             }
 
-            # ✅ Always attach YouTube cookie FIRST (not after fail)
+            # ✅ Always attach YouTube cookie FIRST (Render Secret File)
             if platform == "youtube":
                 if os.path.exists(YOUTUBE_COOKIE_FILE):
                     ydl_opts["cookiefile"] = YOUTUBE_COOKIE_FILE
                 else:
-                    print("⚠️ youtube_cookies.txt NOT FOUND on server! (Render probably missing it)")
+                    print("⚠️ youtube_cookies.txt NOT FOUND on server! Secret File missing.")
 
             # format selection
             if media_type == "audio":
@@ -518,6 +520,7 @@ async def download_worker(worker_id: int):
                 else:
                     ydl_opts["format"] = "best"
 
+            # download attempt
             info = None
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -550,7 +553,7 @@ async def download_worker(worker_id: int):
                     except Exception as ee:
                         print("Stream extract failed:", ee)
 
-                    # 2) If even extraction fails -> send manual open link (guaranteed)
+                    # 2) If even extraction fails -> manual open link
                     await bot.edit_message_text(
                         "⚠️ <b>YouTube requires verification (anti-bot)</b>\n\n"
                         "✅ Open this link manually:\n"
@@ -560,14 +563,12 @@ async def download_worker(worker_id: int):
                     )
                     continue
 
-                # other platforms -> rethrow
                 raise
 
-            # If still no info
             if not info:
                 raise Exception("Download failed (no info)")
 
-            # Locate downloaded file
+            # locate file
             ext = info.get("ext", "mp4") if media_type == "video" else "mp3"
             candidate = f"{tmp_base}.{ext}"
             if os.path.exists(candidate):
@@ -602,7 +603,7 @@ async def download_worker(worker_id: int):
             except:
                 pass
 
-            # send fallback HTML if file too big
+            # big file fallback
             if size_mb > MAX_SEND_MB:
                 html_path = os.path.join(TMP_DIR, f"{short_hash(url)}.html")
                 try:
