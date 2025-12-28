@@ -121,6 +121,7 @@ def detect_platform(url: str):
     if any(x in u for x in ["twitter.com", "x.com", "t.co"]): return "twitter"
     if any(x in u for x in ["facebook.com", "fb.watch", "fb.com"]): return "facebook"
     if any(x in u for x in ["tiktok.com", "vm.tiktok.com"]): return "tiktok"
+    if any(x in u for x in ["youtube.com", "youtu.be", "music.youtube.com"]): return "youtube"
     return None
 
 async def shorten_url(url: str) -> str:
@@ -525,8 +526,27 @@ async def download_worker(worker_id:int):
                     ydl_opts["format"] = "best"
 
             info = None
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = await asyncio.to_thread(ydl.extract_info, url, download=True)
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = await asyncio.to_thread(ydl.extract_info, url, download=True)
+            except Exception as e:
+                info = None
+                # YouTube datacenter IP blocks are common on free hosting; fallback to stream URL if possible.
+                if platform == "youtube":
+                    try:
+                        with yt_dlp.YoutubeDL({**ydl_opts, "skip_download": True}) as ydl:
+                            meta = await asyncio.to_thread(ydl.extract_info, url, download=False)
+                        if isinstance(meta, dict) and meta.get("url"):
+                            title = meta.get("title") or "YouTube"
+                            stream_url = meta.get("url")
+                            await bot.edit_message_text(
+                                f"⚠️ <b>YouTube download blocked by server</b>\n\n🎬 <b>{title}</b>\n🔗 <code>{stream_url}</code>\n\n✅ You can open/download from this link.",
+                                chat_id, status_id, parse_mode="HTML")
+                            download_queue.task_done()
+                            continue
+                    except Exception:
+                        pass
+                raise
 
             if not info:
                 cookie_file = f"{platform}_cookies.txt"
@@ -662,7 +682,6 @@ if __name__ == "__main__":
         print("Main loop stopped:", e)
     finally:
         save_usage()
-
 
 
 
