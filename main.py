@@ -312,24 +312,52 @@ async def inline_commands(call):
         await send_convert_audio_keyboard(chat_id, msg_id)
 
 
+async def shorten_url(url: str) -> str:
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"https://is.gd/create.php?format=simple&url={url}"
+            ) as r:
+                if r.status == 200:
+                    short = (await r.text()).strip()
+                    if short.startswith("http"):
+                        return short
+    except Exception:
+        pass
+    return url
+
+
+
+
 # ===================================================
 # ✅ LINK WORKER (INLINE BUTTON FIXED + CHROME)
 # ===================================================
 async def link_worker(chat_id, reply_to_msgid, final_path, size_mb, info):
+    link = None
+    short_link = None
     try:
         token, link = register_download_link(final_path)
         title = info.get("title", "Your file")
 
-        # ✅ short url (hide your domain)
+        # ✅ shorten link (hide your site)
         short_link = await shorten_url(link)
+        if not short_link:
+            short_link = link
+
+        hyperlink = f'<a href="{short_link}">⬇️ Download Link</a>'
 
         msg = (
             f"🔗 <b>Direct Download Link</b>\n"
             f"📌 <b>{title}</b>\n"
             f"📦 Size: <i>{size_mb:.1f} MB</i>\n"
             f"⏳ Valid: <i>{DOWNLOAD_LINK_TTL//60} min</i>\n\n"
-            f"✅ Copy link below (tap to copy):\n"
-            f"<code>{short_link}</code>"
+            f"{hyperlink}\n\n"
+            f"📋 Tap to copy:\n<code>{short_link}</code>"
+        )
+
+        markup = InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            InlineKeyboardButton("⬇️ Download Now", url=short_link)
         )
 
         await bot.send_message(
@@ -337,17 +365,24 @@ async def link_worker(chat_id, reply_to_msgid, final_path, size_mb, info):
             msg,
             parse_mode="HTML",
             reply_to_message_id=reply_to_msgid,
+            reply_markup=markup,
             disable_web_page_preview=True
         )
 
     except Exception as e:
         print("link_worker error:", e)
 
-        # ✅ fallback (if shortener fails)
+        # ✅ fallback safe message (short_link priority)
+        fallback_text = "❌ Link generation failed! Please try again."
+        if short_link:
+            fallback_text = f"🔗 Download link:\n<code>{short_link}</code>"
+        elif link:
+            fallback_text = f"🔗 Download link:\n<code>{link}</code>"
+
         try:
             await bot.send_message(
                 chat_id,
-                f"🔗 Download link:\n<code>{link}</code>",
+                fallback_text,
                 parse_mode="HTML",
                 reply_to_message_id=reply_to_msgid,
                 disable_web_page_preview=True
@@ -750,5 +785,6 @@ if __name__ == "__main__":
         print("Main loop stopped:", e)
     finally:
         save_usage()
+
 
 
